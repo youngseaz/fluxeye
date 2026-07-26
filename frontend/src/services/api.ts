@@ -4,6 +4,7 @@ import axios from 'axios'
 import type {
   AppStat,
   Conversation,
+  DeviceProfile,
   DeviceProfileList,
   DomainStat,
   GeoConfigInfo,

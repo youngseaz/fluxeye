@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException
+from starlette.responses import FileResponse, JSONResponse
 
 from app.api.router import api_router
 from app.collector.pipeline import CapturePipeline
@@ -91,6 +96,27 @@ app.add_middleware(
 
 # 注册 API 路由
 app.include_router(api_router)
+
+# ── 生产模式: serve 前端静态文件 ──────────────
+if not settings.app.reload:
+    frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+    if frontend_dist.is_dir():
+        # 挂载静态文件
+        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+
+        # SPA fallback: 非 API 路径返回 index.html
+        @app.exception_handler(404)
+        async def not_found_handler(request, exc):
+            if request.url.path.startswith("/api") or request.url.path.startswith("/health"):
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
+            index = frontend_dist / "index.html"
+            if index.exists():
+                return FileResponse(str(index))
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+        logger.info("前端静态文件已挂载: %s", frontend_dist)
+    else:
+        logger.warning("前端构建产物不存在: %s", frontend_dist)
 
 
 @app.get("/health")

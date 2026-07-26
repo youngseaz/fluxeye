@@ -61,6 +61,24 @@ if [ ! -f ".venv/installed" ]; then
     info "Python 依赖安装完成"
 fi
 
+# ── Python 检测 ─────────────────────────────────
+PYTHON=""
+for cmd in python3 python; do
+    if command -v "$cmd" &>/dev/null; then
+        ver=$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+')
+        major=${ver%.*}; minor=${ver#*.}
+        if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 8 ]; }; then
+            PYTHON=$(command -v "$cmd")
+            break
+        fi
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    err "未找到 Python 3.8+，请先安装 Python"
+    exit 1
+fi
+info "使用 Python: $($PYTHON --version 2>&1)"
+
 # ── 开发配置 ────────────────────────────────────
 if [ ! -f "config/config.dev.yaml" ]; then
     info "正在创建 config/config.dev.yaml（从模板复制）..."
@@ -70,7 +88,7 @@ fi
 
 # ── nDPI 引擎 ──────────────────────────────────
 NDPI_DIR="$SCRIPT_DIR/../third/nDPI"
-NDPI_LIB="$NDPI_DIR/src/lib/.libs/libndpi.so"
+NDPI_LIB="$NDPI_DIR/src/lib/libndpi.so"
 BRIDGE_LIB="$SCRIPT_DIR/lib/libndpi_helper.so"
 
 # 初始化 git 子模块（首次拉取 nDPI 源码）
@@ -109,30 +127,12 @@ if [ ! -f "$BRIDGE_LIB" ]; then
     cd "$SCRIPT_DIR/lib"
     gcc -shared -fPIC -o libndpi_helper.so ndpi_helper.c \
         -I"$NDPI_DIR/src/include" -I"$NDPI_DIR/src/lib" \
-        -L"$NDPI_DIR/src/lib/.libs" \
+        -L"$NDPI_DIR/src/lib" \
         -lndpi -lpthread -lm \
-        -Wl,-rpath,"$NDPI_DIR/src/lib/.libs"
+        -Wl,-rpath,"$NDPI_DIR/src/lib"
     cd "$SCRIPT_DIR"
     info "nDPI 桥接库编译完成"
 fi
-
-# ── Python 检测 ─────────────────────────────────
-PYTHON=""
-for cmd in python3 python; do
-    if command -v "$cmd" &>/dev/null; then
-        ver=$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+')
-        major=${ver%.*}; minor=${ver#*.}
-        if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 8 ]; }; then
-            PYTHON=$(command -v "$cmd")
-            break
-        fi
-    fi
-done
-if [ -z "$PYTHON" ]; then
-    err "未找到 Python 3.8+，请先安装 Python"
-    exit 1
-fi
-info "使用 Python: $($PYTHON --version 2>&1)"
 
 # ── 激活虚拟环境 ────────────────────────────────
 if [ -f ".venv/bin/activate" ]; then
@@ -143,10 +143,10 @@ fi
 # ── 环境变量 ────────────────────────────────────
 export FLUXEYE_CONFIG="config/config.dev.yaml"
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
-export LD_LIBRARY_PATH="$NDPI_DIR/src/lib/.libs:/usr/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$NDPI_DIR/src/lib:/usr/lib:$LD_LIBRARY_PATH"
 
 # ── 启动 ────────────────────────────────────────
-APP_PORT=$(grep -A2 '^app:' config/config.dev.yaml | grep 'port' | awk '{print $2}')
+APP_PORT=$(grep -A2 '^app:' config/config.dev.yaml | grep 'port' | awk '{print $2}' || true)
 APP_PORT=${APP_PORT:-8011}
 
 info "FluxEye 开发模式启动中..."

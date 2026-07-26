@@ -60,7 +60,7 @@ fi
 
 # ── nDPI 引擎 ──────────────────────────────────
 NDPI_DIR="$SCRIPT_DIR/../third/nDPI"
-NDPI_LIB="$NDPI_DIR/src/lib/.libs/libndpi.so"
+NDPI_LIB="$NDPI_DIR/src/lib/libndpi.so"
 BRIDGE_LIB="$SCRIPT_DIR/lib/libndpi_helper.so"
 
 # 初始化 git 子模块（首次拉取 nDPI 源码）
@@ -98,9 +98,9 @@ if [ ! -f "$BRIDGE_LIB" ]; then
     cd "$SCRIPT_DIR/lib"
     gcc -shared -fPIC -o libndpi_helper.so ndpi_helper.c \
         -I"$NDPI_DIR/src/include" -I"$NDPI_DIR/src/lib" \
-        -L"$NDPI_DIR/src/lib/.libs" \
+        -L"$NDPI_DIR/src/lib" \
         -lndpi -lpthread -lm \
-        -Wl,-rpath,"$NDPI_DIR/src/lib/.libs"
+        -Wl,-rpath,"$NDPI_DIR/src/lib"
     cd "$SCRIPT_DIR"
 fi
 
@@ -131,7 +131,7 @@ fi
 # ── 环境变量 ────────────────────────────────────
 export FLUXEYE_CONFIG="config/config.yaml"
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
-export LD_LIBRARY_PATH="$NDPI_DIR/src/lib/.libs:/usr/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$NDPI_DIR/src/lib:/usr/lib:$LD_LIBRARY_PATH"
 
 info "FluxEye 生产模式启动中..."
 

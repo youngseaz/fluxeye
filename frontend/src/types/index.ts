@@ -97,6 +97,10 @@ export interface Conversation {
   duration_ms: number
   l7_meta: string
   total_bytes: number
+  // 抓包网卡
+  interface?: string
+  // 目标主机
+  dst_host?: string
   // GeoIP 字段
   dst_country?: string
   dst_region?: string
@@ -257,10 +261,28 @@ export interface GeoConfigInfo {
 
 // ── 应用服务统计 ────────────────────────────────────
 export interface ServiceStat {
+  service: string
+  category?: string
+  flow_count: number
+  bytes_total: number
+  percentage: number
+}
+
+export interface ServiceStatsResponse {
   total_bytes: number
   total_packets: number
   total_flows: number
   by_protocol: { protocol: string; bytes: number }[]
   by_category: { category: string; bytes: number }[]
+  time_range: string
+}
+
+// ── 流量总和 ────────────────────────────────────────
+export interface TrafficTotal {
+  total_bps: number
+  total_pps: number
+  total_bytes: number
+  total_packets: number
+  active_flows: number
   time_range: string
 }
