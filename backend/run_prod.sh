@@ -134,7 +134,8 @@ export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
 export LD_LIBRARY_PATH="$NDPI_DIR/src/lib:/usr/lib:$LD_LIBRARY_PATH"
 
 # ── 抓包权限 ────────────────────────────────────
-PYTHON_BIN=$(readlink -f "$PYTHON")
+# 注意: 需在 source venv 之后获取路径，确保 setcap 在真实运行的 Python 上
+PYTHON_BIN=$(readlink -f "$(command -v python)")
 if ! getcap "$PYTHON_BIN" 2>/dev/null | grep -q cap_net_raw; then
     if command -v setcap &>/dev/null; then
         info "设置 CAP_NET_RAW + CAP_NET_ADMIN 权限（需要 sudo 密码）..."
