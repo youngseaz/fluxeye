@@ -49,10 +49,11 @@ if [ "$NODE_NEEDED" -eq 1 ]; then
         info "安装 fnm (Fast Node Manager)..."
         curl -o- https://fnm.vercel.app/install | bash
         export PATH="$HOME/.local/share/fnm:$PATH"
-        eval "$(fnm env --use-on-cd --shell bash)" 2>/dev/null || true
     fi
+    # 加载 fnm 环境（使 fnm use 生效）
+    eval "$(fnm env --shell bash)" 2>/dev/null || true
     info "通过 fnm 安装 Node.js 24..."
-    fnm install 24
+    fnm install 24 2>&1 | grep -v "already installed"
     fnm use 24
 fi
 
