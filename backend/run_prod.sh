@@ -1,6 +1,6 @@
 #!/bin/bash
 # FluxEye 生产模式启动脚本
-# 自动检查环境依赖，以多 workers 模式启动
+# 自动检查环境依赖、编译 nDPI、以多 workers 模式启动
 
 set -e
 
@@ -12,31 +12,81 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 
-# ── uv 包管理器 ────────────────────────────────
+# ── 系统依赖检测 ────────────────────────────────
+info "检查系统依赖..."
+
+# uv 包管理器
 if ! command -v uv &>/dev/null; then
-    warn "uv 未安装，正在下载安装..."
+    info "安装 uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
-    info "uv 安装完成"
+fi
+
+# C 编译工具链（编译 nDPI 需要）
+BUILD_DEPS=(gcc make autoconf automake pkg-config libtool-bin)
+APT_PKGS=()
+for dep in "${BUILD_DEPS[@]}"; do
+    if ! command -v "$dep" &>/dev/null; then
+        APT_PKGS+=("$dep")
+    fi
+done
+if ! command -v libtool &>/dev/null && ! command -v libtoolize &>/dev/null; then
+    APT_PKGS+=("libtool")
+fi
+if [ ${#APT_PKGS[@]} -gt 0 ]; then
+    info "安装构建工具: ${APT_PKGS[*]}"
+    sudo apt install -y "${APT_PKGS[@]}"
+fi
+
+# rrdtool 开发库
+if ! dpkg -s librrd-dev &>/dev/null 2>&1; then
+    info "安装 librrd-dev..."
+    sudo apt install -y librrd-dev
 fi
 
 # ── 虚拟环境 ────────────────────────────────────
 if [ ! -d ".venv" ]; then
-    info "正在创建虚拟环境..."
+    info "创建虚拟环境..."
     uv venv
 fi
 
-# ── 依赖 ────────────────────────────────────────
+# ── Python 依赖 ────────────────────────────────
 if [ ! -f ".venv/installed" ]; then
-    info "正在安装生产依赖..."
+    info "安装生产依赖..."
     uv sync --no-dev
     touch .venv/installed
-    info "依赖安装完成"
 fi
 
+# ── nDPI 引擎 ──────────────────────────────────
+NDPI_DIR="$SCRIPT_DIR/../third/nDPI"
+NDPI_LIB="$NDPI_DIR/src/lib/.libs/libndpi.so"
+BRIDGE_LIB="$SCRIPT_DIR/lib/libndpi_helper.so"
+
+if [ ! -f "$NDPI_LIB" ]; then
+    info "编译 nDPI 引擎..."
+    cd "$NDPI_DIR"
+    ./autogen.sh --quiet 2>/dev/null
+    ./configure --enable-shared --disable-example --quiet 2>/dev/null
+    make -j$(nproc) 2>/dev/null
+    cd "$SCRIPT_DIR"
+fi
+
+# ── nDPI 桥接库 ────────────────────────────────
+if [ ! -f "$BRIDGE_LIB" ]; then
+    info "编译 nDPI 桥接库..."
+    cd "$SCRIPT_DIR/lib"
+    gcc -shared -fPIC -o libndpi_helper.so ndpi_helper.c \
+        -I"$NDPI_DIR/src/include" -I"$NDPI_DIR/src/lib" \
+        -L"$NDPI_DIR/src/lib/.libs" \
+        -lndpi -lpthread -lm \
+        -Wl,-rpath,"$NDPI_DIR/src/lib/.libs"
+    cd "$SCRIPT_DIR"
+fi
+
+# ── 环境变量 ────────────────────────────────────
 export FLUXEYE_CONFIG="config/config.yaml"
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
-export LD_LIBRARY_PATH="/usr/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$NDPI_DIR/src/lib/.libs:/usr/lib:$LD_LIBRARY_PATH"
 
 info "FluxEye 生产模式启动中..."
 

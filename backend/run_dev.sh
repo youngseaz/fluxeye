@@ -25,24 +25,26 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # C 编译工具链
-BUILD_DEPS=(gcc make autoconf automake libtool pkg-config)
-MISSING=()
+BUILD_DEPS=(gcc make autoconf automake pkg-config libtool-bin)
+APT_PKGS=()
 for dep in "${BUILD_DEPS[@]}"; do
     if ! command -v "$dep" &>/dev/null; then
-        MISSING+=("$dep")
+        APT_PKGS+=("$dep")
     fi
 done
-if [ ${#MISSING[@]} -gt 0 ]; then
-    err "缺少构建工具: ${MISSING[*]}"
-    err "请安装: sudo apt install ${MISSING[*]}"
-    exit 1
+# libtoolize 由 libtool 或 libtool-bin 提供
+if ! command -v libtool &>/dev/null && ! command -v libtoolize &>/dev/null; then
+    APT_PKGS+=("libtool")
+fi
+if [ ${#APT_PKGS[@]} -gt 0 ]; then
+    info "安装构建工具: ${APT_PKGS[*]}"
+    sudo apt install -y "${APT_PKGS[@]}"
 fi
 
 # rrdtool 开发库（pip 包 rrdtool 需要 rrd.h）
 if ! dpkg -s librrd-dev &>/dev/null 2>&1; then
-    warn "缺少 librrd-dev，安装中..."
+    info "安装 librrd-dev..."
     sudo apt install -y librrd-dev
-    info "librrd-dev 安装完成"
 fi
 
 # ── 虚拟环境 ────────────────────────────────────
