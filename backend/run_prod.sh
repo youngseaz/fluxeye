@@ -24,15 +24,15 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # C 编译工具链（编译 nDPI 需要）
-BUILD_DEPS=(gcc make autoconf automake pkg-config libtool-bin)
+BUILD_DEPS=(gcc make autoconf automake pkg-config)
 APT_PKGS=()
 for dep in "${BUILD_DEPS[@]}"; do
     if ! command -v "$dep" &>/dev/null; then
         APT_PKGS+=("$dep")
     fi
 done
-if ! command -v libtool &>/dev/null && ! command -v libtoolize &>/dev/null; then
-    APT_PKGS+=("libtool")
+if ! command -v libtoolize &>/dev/null; then
+    APT_PKGS+=("libtool-bin")
 fi
 if [ ${#APT_PKGS[@]} -gt 0 ]; then
     info "安装构建工具: ${APT_PKGS[*]}"
@@ -132,6 +132,16 @@ fi
 export FLUXEYE_CONFIG="config/config.yaml"
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
 export LD_LIBRARY_PATH="$NDPI_DIR/src/lib:/usr/lib:$LD_LIBRARY_PATH"
+
+# ── 抓包权限 ────────────────────────────────────
+PYTHON_BIN=$(command -v python)
+if ! getcap "$PYTHON_BIN" 2>/dev/null | grep -q cap_net_raw; then
+    if command -v setcap &>/dev/null; then
+        info "设置 CAP_NET_RAW + CAP_NET_ADMIN 权限（需要 sudo）..."
+        sudo setcap cap_net_raw,cap_net_admin=eip "$PYTHON_BIN" 2>/dev/null || \
+            warn "设置权限失败，抓包可能需要 root 权限"
+    fi
+fi
 
 info "FluxEye 生产模式启动中..."
 
