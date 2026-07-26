@@ -116,6 +116,30 @@ if [ ! -f "$BRIDGE_LIB" ]; then
     info "nDPI 桥接库编译完成"
 fi
 
+# ── Python 检测 ─────────────────────────────────
+PYTHON=""
+for cmd in python3 python; do
+    if command -v "$cmd" &>/dev/null; then
+        ver=$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+')
+        major=${ver%.*}; minor=${ver#*.}
+        if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 8 ]; }; then
+            PYTHON=$(command -v "$cmd")
+            break
+        fi
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    err "未找到 Python 3.8+，请先安装 Python"
+    exit 1
+fi
+info "使用 Python: $($PYTHON --version 2>&1)"
+
+# ── 激活虚拟环境 ────────────────────────────────
+if [ -f ".venv/bin/activate" ]; then
+    source .venv/bin/activate
+    info "已激活虚拟环境: .venv"
+fi
+
 # ── 环境变量 ────────────────────────────────────
 export FLUXEYE_CONFIG="config/config.dev.yaml"
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
