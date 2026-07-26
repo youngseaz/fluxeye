@@ -62,6 +62,26 @@ NDPI_DIR="$SCRIPT_DIR/../third/nDPI"
 NDPI_LIB="$NDPI_DIR/src/lib/.libs/libndpi.so"
 BRIDGE_LIB="$SCRIPT_DIR/lib/libndpi_helper.so"
 
+# 初始化 git 子模块（首次拉取 nDPI 源码）
+if [ ! -d "$NDPI_DIR/.git" ]; then
+    info "拉取 nDPI 子模块..."
+    cd "$SCRIPT_DIR/.."
+    git submodule update --init third/nDPI
+    cd "$SCRIPT_DIR"
+    info "nDPI 子模块拉取完成"
+fi
+
+# checkout 到指定 release 版本
+NDPI_TAG="5.0"
+CURRENT_TAG=$(cd "$NDPI_DIR" && git describe --tags --exact-match 2>/dev/null || true)
+if [ "$CURRENT_TAG" != "$NDPI_TAG" ]; then
+    info "切换到 nDPI $NDPI_TAG..."
+    cd "$NDPI_DIR"
+    git checkout "$NDPI_TAG" 2>/dev/null
+    cd "$SCRIPT_DIR"
+    info "nDPI 已切换到 $NDPI_TAG"
+fi
+
 if [ ! -f "$NDPI_LIB" ]; then
     info "编译 nDPI 引擎..."
     cd "$NDPI_DIR"
