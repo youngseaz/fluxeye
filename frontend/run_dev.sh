@@ -33,12 +33,21 @@ if command -v node &>/dev/null; then
     fi
 fi
 
+# 在常见路径中查找 fnm（不一定在 PATH 中）
+if ! command -v fnm &>/dev/null; then
+    for fnm_path in "$HOME/.local/share/fnm/fnm" "$HOME/.fnm/fnm"; do
+        if [ -x "$fnm_path" ]; then
+            export PATH="$(dirname "$fnm_path"):$PATH"
+            break
+        fi
+    done
+fi
+
 if [ -z "$INSTALLED_NODE" ]; then
     if ! command -v fnm &>/dev/null; then
         info "安装 fnm (Fast Node Manager)..."
         curl -o- https://fnm.vercel.app/install | bash
         export PATH="$HOME/.local/share/fnm:$PATH"
-        # fnm 安装后需要 eval
         eval "$(fnm env --use-on-cd --shell bash)" 2>/dev/null || true
     fi
     info "通过 fnm 安装 Node.js $NODE_VERSION..."

@@ -34,6 +34,16 @@ else
     NODE_NEEDED=1
 fi
 
+# 在常见路径中查找 fnm（不一定在 PATH 中）
+if ! command -v fnm &>/dev/null; then
+    for fnm_path in "$HOME/.local/share/fnm/fnm" "$HOME/.fnm/fnm"; do
+        if [ -x "$fnm_path" ]; then
+            export PATH="$(dirname "$fnm_path"):$PATH"
+            break
+        fi
+    done
+fi
+
 if [ "$NODE_NEEDED" -eq 1 ]; then
     if ! command -v fnm &>/dev/null; then
         info "安装 fnm (Fast Node Manager)..."
