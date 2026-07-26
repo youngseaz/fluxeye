@@ -149,9 +149,12 @@ export LD_LIBRARY_PATH="$NDPI_DIR/src/lib:/usr/lib:$LD_LIBRARY_PATH"
 PYTHON_BIN=$(command -v python)
 if ! getcap "$PYTHON_BIN" 2>/dev/null | grep -q cap_net_raw; then
     if command -v setcap &>/dev/null; then
-        info "设置 CAP_NET_RAW + CAP_NET_ADMIN 权限（需要 sudo）..."
-        sudo setcap cap_net_raw,cap_net_admin=eip "$PYTHON_BIN" 2>/dev/null || \
-            warn "设置权限失败，抓包可能需要 root 权限"
+        info "设置 CAP_NET_RAW + CAP_NET_ADMIN 权限（需要 sudo 密码）..."
+        sudo setcap cap_net_raw,cap_net_admin=eip "$PYTHON_BIN"
+        info "权限设置成功"
+    else
+        warn "未找到 setcap 命令，请手动设置抓包权限:"
+        warn "  sudo setcap cap_net_raw,cap_net_admin=eip $PYTHON_BIN"
     fi
 fi
 

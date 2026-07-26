@@ -13,6 +13,15 @@ info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 err()   { echo -e "${RED}[x]${NC} $1"; }
 
+# ── 系统依赖检测 ────────────────────────────────
+APT_PKGS=()
+if ! command -v curl &>/dev/null; then APT_PKGS+=("curl"); fi
+if ! command -v unzip &>/dev/null; then APT_PKGS+=("unzip"); fi
+if [ ${#APT_PKGS[@]} -gt 0 ]; then
+    info "安装前端工具: ${APT_PKGS[*]}"
+    sudo apt install -y "${APT_PKGS[@]}"
+fi
+
 # ── Node.js / fnm 检测 ──────────────────────────
 NODE_VERSION="24"
 INSTALLED_NODE=""
