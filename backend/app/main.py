@@ -85,10 +85,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS 中间件（允许前端开发服务器跨域）
+# CORS 中间件（生产环境应限制为具体域名）
+# 开发环境允许 localhost:5173，生产环境替换为实际前端域名
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors.origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

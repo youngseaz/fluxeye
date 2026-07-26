@@ -336,7 +336,6 @@ async def download_pcap(filename: str):
         path=str(file_path),
         filename=filename,
         media_type="application/vnd.tcpdump.pcap",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

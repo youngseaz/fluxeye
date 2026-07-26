@@ -1637,7 +1637,7 @@ class SQLiteStore(StorageBackend):
             "risk": "risk_score DESC",
         }
         order = order_map.get(sort_by, "total_bytes DESC")
-
+        # 安全说明: order 来自上方硬编码白名单映射，不可被用户篡改，因此 f-string 是安全的
         # 按 MAC 地址聚合（若有），否则按 src_ip 聚合
         cursor = await self._conn.execute(
             f"""SELECT

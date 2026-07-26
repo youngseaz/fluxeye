@@ -91,6 +91,10 @@ class GeoIPConfig(BaseSettings):
         return str(v) if v else ""
 
 
+class CorsConfig(BaseSettings):
+    origins: list[str] = ["http://localhost:5173", "http://localhost:8000"]
+
+
 class AppConfig(BaseSettings):
     title: str = "FluxEye API"
     version: str = "0.1.0"
@@ -104,6 +108,7 @@ class Settings(BaseSettings):
     """全局配置，从 config.yaml 加载 + 环境变量覆盖。"""
 
     app: AppConfig = AppConfig()
+    cors: CorsConfig = CorsConfig()
     storage: StorageConfig = StorageConfig()
     collector: CollectorConfig = CollectorConfig()
     geoip: GeoIPConfig = GeoIPConfig()

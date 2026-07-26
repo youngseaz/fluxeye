@@ -224,6 +224,16 @@ async def upload_geo_database(file: UploadFile = File(...)):
         raise HTTPException(400, "仅支持 .mmdb 和 .tar.gz 文件")
 
     dest = db_dir / file.filename
+
+    # 安全校验：防止路径穿越
+    try:
+        dest = dest.resolve()
+        db_dir_resolved = db_dir.resolve()
+        if not str(dest).startswith(str(db_dir_resolved)):
+            raise HTTPException(400, "非法文件名")
+    except (ValueError, OSError):
+        raise HTTPException(400, "无效文件名")
+
     try:
         content = await file.read()
         dest.write_bytes(content)
