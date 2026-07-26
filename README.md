@@ -117,7 +117,7 @@ fluxeye/
 │   ├── scripts/          # 工具脚本
 │   ├── Dockerfile
 │   ├── pyproject.toml
-│   └── requirements.txt
+│   └── pyproject.toml       # 依赖管理 (uv sync)
 ├── frontend/
 │   ├── src/              # Vue3 组件
 │   │   ├── views/        # 页面
@@ -151,7 +151,7 @@ fluxeye/
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 2. nDPI 引擎 (强烈推荐)

@@ -76,7 +76,7 @@ NIC (AF_PACKET) → PacketCapture (IPv4/IPv6) → nDPI DPI
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 2. nDPI Engine (Recommended)
@@ -172,7 +172,7 @@ fluxeye/
 │   ├── tests/            # Test suite (169+ tests)
 │   ├── Dockerfile
 │   ├── pyproject.toml
-│   └── requirements.txt
+│   └── pyproject.toml       # Dependency management (uv sync)
 ├── frontend/
 │   ├── src/              # Vue3 components
 │   │   ├── views/        # Pages
