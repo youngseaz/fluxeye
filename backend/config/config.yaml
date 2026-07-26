@@ -1,0 +1,61 @@
+# FluxEye 后端配置（生产模板）
+# 开发环境请复制为 config.dev.yaml 使用
+# cp config.yaml config.dev.yaml
+
+app:
+  title: "FluxEye API"
+  version: "0.1.0"
+  host: "0.0.0.0"
+  port: 8000
+  reload: false
+  log_level: "info"
+
+storage:
+  backend: sqlite
+  retention_days: 7
+  sqlite:
+    path: ./data/fluxeye.db
+    wal: true
+    journal_size_limit: 1048576
+  influxdb:
+    url: http://localhost:8086
+    token: ""
+    org: fluxeye
+    bucket: flow_stats
+  clickhouse:
+    host: localhost
+    port: 9000
+    database: fluxeye
+    user: default
+    password: ""
+
+collector:
+  interface: "eth0"
+  bpf_filter: ""
+  snap_len: 65535
+  promisc: true
+  pcap_file: ""
+  flush_interval: 5.0
+  dpi_lib_path: "libndpi_helper.so"
+  pcap_output:
+    enabled: false
+    dir: ./data/captures
+    max_file_size_mb: 100
+    max_file_count: 10
+  tls_keylog:
+    filepath: ""
+    auto_reload: true
+    reload_interval: 5.0
+
+geoip:
+  account_id: ""
+  license_key: ""
+  edition_ids:
+    - GeoLite2-City
+    - GeoLite2-ASN
+    - GeoLite2-Country
+  city_db: ./data/geoip/GeoLite2-City.mmdb
+  asn_db: ./data/geoip/GeoLite2-ASN.mmdb
+  country_db: ./data/geoip/GeoLite2-Country.mmdb
+  auto_update: false
+  update_interval_days: 7

@@ -1,0 +1,73 @@
+# FluxEye DPI 可视化系统 — Docker Compose 编排
+# 使用: docker compose up -d
+# 仅后端: docker compose up -d fluxeye-api
+
+services:
+  # ── FluxEye API 服务 ──────────────────────────────
+  fluxeye-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: fluxeye-api:latest
+    container_name: fluxeye-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - FLUXEYE_STORAGE__BACKEND=sqlite
+      - FLUXEYE_STORAGE__SQLITE__PATH=/data/fluxeye.db
+      - FLUXEYE_COLLECTOR__INTERFACE=${COLLECTOR_INTERFACE:-}
+    volumes:
+      - fluxeye-data:/data
+      - /proc/net:/proc/net:ro  # 网络接口信息
+    cap_add:
+      - NET_ADMIN      # raw socket 权限
+      - NET_RAW        # raw socket 权限
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── InfluxDB（可选） ──────────────────────────────
+  influxdb:
+    image: influxdb:2.7
+    container_name: fluxeye-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD:-changeme}
+      - DOCKER_INFLUXDB_INIT_ORG=fluxeye
+      - DOCKER_INFLUXDB_INIT_BUCKET=flow_stats
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-fluxeye-token}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    profiles:
+      - full  # 默认不启动，docker compose --profile full up -d
+
+  # ── ClickHouse（可选） ────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: fluxeye-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native
+    environment:
+      - CLICKHOUSE_DB=fluxeye
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./backend/scripts/clickhouse_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    profiles:
+      - full
+
+volumes:
+  fluxeye-data:
+  influxdb-data:
+  clickhouse-data:
