@@ -459,6 +459,7 @@ class CapturePipeline:
             dst_as_org=geo_as_org,
             dst_lat=geo_lat,
             dst_lon=geo_lon,
+            pcap_file=self.pcap_writer.current_file if self.pcap_writer else "",
         )
 
         # pcap 文件输出（类似 tcpdump -w），支持 BPF 过滤

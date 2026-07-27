@@ -56,7 +56,7 @@
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="国家" v-if="flow.dst_country">
             <span :class="['fi', 'fi-' + flow.dst_country.toLowerCase(), 'geo-flag-icon']"></span>
-            {{ flow.dst_country }}
+            {{ countryName(flow.dst_country) }}
           </el-descriptions-item>
           <el-descriptions-item label="省/州" v-if="flow.dst_region">
             {{ flow.dst_region }}
@@ -113,6 +113,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchFlowDetail } from '@/services/api'
 import type { Conversation } from '@/types'
+import { countryName } from '@/utils/country'
 
 const route = useRoute()
 const router = useRouter()

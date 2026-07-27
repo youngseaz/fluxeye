@@ -181,15 +181,16 @@ async def get_geo_config():
 
 @router.post("/config")
 async def update_geo_config(req: GeoConfigUpdate):
-    """更新 GeoIP 配置（写入环境变量，重启后需重新配置）。"""
+    """更新 GeoIP 配置（同时更新内存中的 settings 和环境变量）。"""
     import os as _os
-    # 写入临时环境变量供当前进程使用
     if req.account_id:
-        _os.environ["FLUXEYE__GEOIP__ACCOUNT_ID"] = req.account_id
+        settings.geoip.account_id = req.account_id
+        _os.environ["FLUXEYE_GEOIP__ACCOUNT_ID"] = req.account_id
     if req.license_key:
-        _os.environ["FLUXEYE__GEOIP__LICENSE_KEY"] = req.license_key
+        settings.geoip.license_key = req.license_key
+        _os.environ["FLUXEYE_GEOIP__LICENSE_KEY"] = req.license_key
     logger.info("GeoIP 配置已更新: account_id=%s", req.account_id)
-    return {"message": "GeoIP 配置已更新（仅当前会话有效）", "success": True}
+    return {"message": "GeoIP 配置已更新", "success": True}
 
 
 @router.get("/databases")

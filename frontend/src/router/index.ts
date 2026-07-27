@@ -47,6 +47,12 @@ const router = createRouter({
       component: () => import('@/views/DeviceProfiles.vue'),
       meta: { title: '设备画像' },
     },
+    {
+      path: '/profiles/:ip',
+      name: 'device-detail',
+      component: () => import('@/views/DeviceDetail.vue'),
+      meta: { title: '设备详情' },
+    },
   ],
 })
 

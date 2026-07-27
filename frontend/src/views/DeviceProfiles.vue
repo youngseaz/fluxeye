@@ -97,75 +97,16 @@
       style="margin-top: 16px; justify-content: center"
       @current-change="fetchData"
     />
-
-    <!-- 设备详情对话框 -->
-    <el-dialog v-model="detailVisible" :title="dialogTitle" width="700px" destroy-on-close>
-      <template v-if="detail.ip || detail.mac">
-        <el-descriptions :column="2" border size="small" style="margin-bottom: 16px">
-          <el-descriptions-item label="MAC 地址" v-if="detail.mac">{{ detail.mac }}</el-descriptions-item>
-          <el-descriptions-item label="设备厂商" v-if="detail.vendor">
-            <el-tag type="info" effect="plain">{{ detail.vendor }}</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="发送流量">{{ formatBytes(detail.bytes_sent) }}</el-descriptions-item>
-          <el-descriptions-item label="接收流量">{{ formatBytes(detail.bytes_recv) }}</el-descriptions-item>
-          <el-descriptions-item label="发送包数">{{ detail.packets_sent }}</el-descriptions-item>
-          <el-descriptions-item label="接收包数">{{ detail.packets_recv }}</el-descriptions-item>
-          <el-descriptions-item label="总流数">{{ detail.flow_count }}</el-descriptions-item>
-          <el-descriptions-item label="活跃时长">{{ formatDuration(detail.active_seconds) }}</el-descriptions-item>
-          <el-descriptions-item label="首次活动">{{ detail.first_seen ? formatTime(detail.first_seen) : '-' }}</el-descriptions-item>
-          <el-descriptions-item label="最后活动">{{ detail.last_seen ? formatTime(detail.last_seen) : '-' }}</el-descriptions-item>
-          <el-descriptions-item label="风险分" v-if="detail.risk_score > 0">
-            <el-tag :type="riskTagType(detail.risk_level)" size="small">{{ detail.risk_score }} ({{ detail.risk_level }})</el-tag>
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <el-tabs type="border-card">
-          <el-tab-pane label="协议分布">
-            <div v-for="p in detail.top_protocols" :key="p.protocol" class="detail-row">
-              <span class="detail-name">{{ p.protocol }}</span>
-              <span class="detail-bar-bg"><span class="detail-bar" :style="{ width: pct(p.bytes, detail.bytes_sent + detail.bytes_recv) + '%' }" /></span>
-              <span class="detail-val">{{ formatBytes(p.bytes) }}</span>
-            </div>
-            <el-empty v-if="detail.top_protocols.length === 0" description="暂无协议数据" :image-size="60" />
-          </el-tab-pane>
-          <el-tab-pane label="访问域名">
-            <div v-for="d in detail.top_domains" :key="d.host" class="detail-row">
-              <span class="detail-name" :title="d.host">{{ d.host }}</span>
-              <span class="detail-bar-bg"><span class="detail-bar bar-green" :style="{ width: pct(d.bytes, detail.bytes_sent + detail.bytes_recv) + '%' }" /></span>
-              <span class="detail-val">{{ formatBytes(d.bytes) }}</span>
-            </div>
-            <el-empty v-if="detail.top_domains.length === 0" description="暂无域名数据" :image-size="60" />
-          </el-tab-pane>
-          <el-tab-pane label="通信对端">
-            <div v-for="p in detail.top_peers" :key="p.ip" class="detail-row">
-              <span class="detail-name">{{ p.ip }}</span>
-              <el-tag size="small" :type="p.direction === 'egress' ? 'primary' : 'success'" style="margin:0 6px">
-                {{ p.direction === 'egress' ? '→ 出' : '← 入' }}
-              </el-tag>
-              <span class="detail-bar-bg"><span class="detail-bar bar-orange" :style="{ width: pct(p.bytes_total, detail.bytes_sent + detail.bytes_recv) + '%' }" /></span>
-              <span class="detail-val">{{ formatBytes(p.bytes_total) }}</span>
-            </div>
-            <el-empty v-if="detail.top_peers.length === 0" description="暂无对端数据" :image-size="60" />
-          </el-tab-pane>
-          <el-tab-pane label="目标地区">
-            <div v-for="c in detail.top_countries" :key="c.country" class="detail-row">
-              <span class="detail-name">{{ c.country }}</span>
-              <span class="detail-bar-bg"><span class="detail-bar bar-purple" :style="{ width: pct(c.bytes, detail.bytes_sent + detail.bytes_recv) + '%' }" /></span>
-              <span class="detail-val">{{ formatBytes(c.bytes) }}</span>
-            </div>
-            <el-empty v-if="detail.top_countries.length === 0" description="暂无地区数据" :image-size="60" />
-          </el-tab-pane>
-        </el-tabs>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { fetchDeviceProfiles, fetchDeviceProfileDetail } from '@/services/api'
+import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { fetchDeviceProfiles } from '@/services/api'
 import type { DeviceProfile, DeviceProfileList } from '@/types'
 
+const router = useRouter()
 const loading = ref(false)
 const error = ref('')
 const timeRange = ref('1h')
@@ -173,21 +114,6 @@ const sortBy = ref('bytes')
 const page = ref(1)
 
 const list = reactive<DeviceProfileList>({ devices: [], total: 0, page: 1, size: 20 })
-const detailVisible = ref(false)
-const detail = reactive<DeviceProfile>({
-  ip: '', mac: '', vendor: '', hostname: '',
-  bytes_sent: 0, bytes_recv: 0, packets_sent: 0, packets_recv: 0,
-  flow_count: 0, first_seen: null, last_seen: null, active_seconds: 0,
-  top_protocols: [], top_services: [], top_domains: [], top_peers: [], top_countries: [],
-  risk_score: 0, risk_events: 0, risk_level: '',
-})
-
-const dialogTitle = computed(() => {
-  const parts = ['设备画像']
-  if (detail.ip) parts.push('— ' + detail.ip)
-  if (detail.mac) parts.push('(' + detail.mac + ')')
-  return parts.join(' ')
-})
 
 async function fetchData() {
   loading.value = true
@@ -202,16 +128,8 @@ async function fetchData() {
   }
 }
 
-async function selectDevice(dev: DeviceProfile) {
-  detailVisible.value = true
-  Object.assign(detail, dev)
-  try {
-    const ipOrMac = dev.mac || dev.ip
-    const data = await fetchDeviceProfileDetail(ipOrMac, timeRange.value)
-    if (data) Object.assign(detail, data)
-  } catch {
-    // 保留卡片数据
-  }
+function selectDevice(dev: DeviceProfile) {
+  router.push('/profiles/' + (dev.ip || dev.mac))
 }
 
 function formatBytes(b: number): string {

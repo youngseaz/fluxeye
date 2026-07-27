@@ -118,7 +118,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="目标位置" v-if="detailFlow.dst_country" :span="2">
             <span :class="['fi', 'fi-' + detailFlow.dst_country.toLowerCase(), 'geo-flag-icon']"></span>
-            {{ detailFlow.dst_country }}<span v-if="detailFlow.dst_region"> / {{ detailFlow.dst_region }}</span>
+            {{ countryName(detailFlow.dst_country) }}<span v-if="detailFlow.dst_region"> / {{ detailFlow.dst_region }}</span>
             <span v-if="detailFlow.dst_city"> / {{ detailFlow.dst_city }}</span>
             <span v-if="detailFlow.dst_asn" style="color:#909399;font-size:12px;margin-left:4px">AS{{ detailFlow.dst_asn }} {{ detailFlow.dst_as_org }}</span>
           </el-descriptions-item>
@@ -142,6 +142,7 @@
 import { ref, computed, reactive } from 'vue'
 import type { Page, Conversation } from '@/types'
 import { useRouter } from 'vue-router'
+import { countryFlag, countryName } from '@/utils/country'
 
 const props = withDefaults(defineProps<{
   data: Conversation[] | Page | null
@@ -196,18 +197,18 @@ interface ColumnConfig {
 
 const visibleColumns = computed<ColumnConfig[]>(() => {
   const colMap: Record<string, ColumnConfig> = {
-    time:     { key: 'time', prop: 'timestamp', label: '时间', width: 170 },
-    interface:{ key: 'interface', label: '网卡', width: 70 },
-    src:      { key: 'src', label: '源', width: 165 },
-    dst:      { key: 'dst', label: '目标', width: 165 },
-    host:     { key: 'host', label: '目标主机', minWidth: 140, maxWidth: 260 },
-    geo:      { key: 'geo', label: '目标位置', minWidth: 140, maxWidth: 240 },
-    proto:    { key: 'proto', prop: 'l7_proto', label: '协议', width: 100 },
-    category: { key: 'category', prop: 'l7_category', label: '类型', width: 80 },
-    traffic:  { key: 'traffic', label: '流量', width: 95 },
-    duration: { key: 'duration', label: '时长', width: 75 },
-    first_seen:{ key: 'first_seen', label: '首次活动', width: 170 },
-    last_seen: { key: 'last_seen', label: '最后活动', width: 170 },
+    time:     { key: 'time', prop: 'timestamp', label: '时间', minWidth: 150, maxWidth: 180 },
+    interface:{ key: 'interface', label: '网卡', minWidth: 55, maxWidth: 80 },
+    src:      { key: 'src', label: '源', minWidth: 130 },
+    dst:      { key: 'dst', label: '目标', minWidth: 130 },
+    host:     { key: 'host', label: '目标主机', minWidth: 120, maxWidth: 260 },
+    geo:      { key: 'geo', label: '目标位置', minWidth: 110, maxWidth: 220 },
+    proto:    { key: 'proto', prop: 'l7_proto', label: '协议', minWidth: 80, maxWidth: 110 },
+    category: { key: 'category', prop: 'l7_category', label: '类型', minWidth: 65, maxWidth: 100 },
+    traffic:  { key: 'traffic', label: '流量', minWidth: 80, maxWidth: 110 },
+    duration: { key: 'duration', label: '时长', minWidth: 65, maxWidth: 85 },
+    first_seen:{ key: 'first_seen', label: '首次活动', minWidth: 150, maxWidth: 180 },
+    last_seen: { key: 'last_seen', label: '最后活动', minWidth: 150, maxWidth: 180 },
   }
   return columns.value.filter(c => c.visible).map(c => colMap[c.key]).filter(Boolean)
 })
@@ -233,7 +234,8 @@ function renderCell(key: string, row: any): string {
 function renderGeo(row: any): string {
   if (!row.dst_country) return '-'
   const flag = row.dst_country.toLowerCase()
-  let html = `<span class="fi fi-${flag}"></span> ${row.dst_country}`
+  const name = countryName(row.dst_country)
+  let html = `<span class="fi fi-${flag}" style="margin-right:3px"></span> ${name}`
   if (row.dst_region) html += ` / ${row.dst_region}`
   if (row.dst_city) html += ` / ${row.dst_city}`
   return html

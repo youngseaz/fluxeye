@@ -141,6 +141,7 @@ class SQLiteStore(StorageBackend):
             "ALTER TABLE flows ADD COLUMN risks TEXT DEFAULT '[]'",
             "ALTER TABLE flows ADD COLUMN risk_score INTEGER DEFAULT 0",
             "ALTER TABLE flows ADD COLUMN l7_category TEXT DEFAULT ''",
+            "ALTER TABLE flows ADD COLUMN pcap_file TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -165,9 +166,9 @@ class SQLiteStore(StorageBackend):
                 l4_proto, l7_proto, bytes_sent, bytes_recv,
                 packets_sent, packets_recv, l7_meta, duration_ms, l7_category,
                 dst_country, dst_region, dst_city, dst_asn, dst_as_org, dst_lat, dst_lon,
-                dst_host, interface, risks, risk_score)
+                dst_host, interface, risks, risk_score, pcap_file)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ts,
                 flow.src_mac,
@@ -196,6 +197,7 @@ class SQLiteStore(StorageBackend):
                 flow.interface,
                 risks_json,
                 flow.risk_score,
+                flow.pcap_file,
             ),
         )
         await self._conn.commit()
@@ -235,6 +237,7 @@ class SQLiteStore(StorageBackend):
                 f.interface,
                 json.dumps(f.risks, ensure_ascii=False),
                 f.risk_score,
+                f.pcap_file,
             )
             for f in flows
         ]
@@ -244,9 +247,9 @@ class SQLiteStore(StorageBackend):
                 l4_proto, l7_proto, bytes_sent, bytes_recv,
                 packets_sent, packets_recv, l7_meta, duration_ms, l7_category,
                 dst_country, dst_region, dst_city, dst_asn, dst_as_org, dst_lat, dst_lon,
-                dst_host, interface, risks, risk_score)
+                dst_host, interface, risks, risk_score, pcap_file)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )
         await self._conn.commit()
@@ -525,6 +528,7 @@ class SQLiteStore(StorageBackend):
             interface=row["interface"] if "interface" in row.keys() else "",
             risks=risks_data,
             risk_score=risk_score_val,
+            pcap_file=row["pcap_file"] if "pcap_file" in row.keys() else "",
         )
 
     # ── 维护 ────────────────────────────────────────────
@@ -1826,9 +1830,20 @@ class SQLiteStore(StorageBackend):
         mac = row["src_mac"] or ""
         vendor_name = lookup_vendor(mac) if mac else ""
 
+        # 按 MAC 查询时，从数据库获取该设备的真实 IP
+        device_ip = ip
+        if is_mac_query:
+            ip_cursor = await self._conn.execute(
+                "SELECT src_ip, COUNT(*) AS cnt FROM flows WHERE src_mac = ? AND timestamp_s >= ? GROUP BY src_ip ORDER BY cnt DESC LIMIT 1",
+                (ip, since_ts),
+            )
+            ip_row = await ip_cursor.fetchone()
+            if ip_row and ip_row["src_ip"]:
+                device_ip = ip_row["src_ip"]
+
         return DeviceProfile(
             mac=mac,
-            ip=ip if not is_mac_query else "",
+            ip=device_ip,
             vendor=vendor_alias(vendor_name),
             bytes_sent=row["bytes_sent"],
             bytes_recv=row["bytes_recv"],

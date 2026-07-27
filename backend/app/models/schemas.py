@@ -43,6 +43,8 @@ class FlowRecord(BaseModel):
     dst_as_org: str = ""
     dst_lat: float = 0.0
     dst_lon: float = 0.0
+    # PCAP 文件（用于回看报文）
+    pcap_file: str = ""
     # 安全风险
     risks: list[dict] = Field(default_factory=list)
     risk_score: int = 0
@@ -294,3 +296,25 @@ class SystemStatus(BaseModel):
     collector_running: bool = False
     flows_cached: int = 0
     version: str = "0.1.0"
+
+
+# ── 存储状态 ──────────────────────────────────────────
+
+class StorageInfo(BaseModel):
+    """存储使用情况。"""
+    mount_point: str = ""           # 数据所在挂载点路径
+    data_path: str = ""             # 数据目录路径
+    data_size_bytes: int = 0        # 数据目录实际占用大小
+    disk_total: int = 0             # 挂载点总容量
+    disk_used: int = 0              # 挂载点已用
+    disk_free: int = 0              # 挂载点剩余
+    disk_usage_percent: float = 0.0 # 挂载点使用率
+    pcap_dir: str = ""              # pcap 子目录
+    pcap_files: int = 0             # pcap 文件数
+    pcap_size_bytes: int = 0        # pcap 文件总大小
+    pcap_storage_threshold: int = 90
+
+
+class PcapCleanupConfig(BaseModel):
+    """pcap 老化清理配置。"""
+    storage_threshold_percent: int = 90

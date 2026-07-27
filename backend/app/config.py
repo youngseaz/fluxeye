@@ -45,6 +45,7 @@ class PcapOutputConfig(BaseSettings):
     dir: str = "./data/captures"
     max_file_size_mb: int = 100
     max_file_count: int = 10
+    storage_threshold_percent: int = 90  # 磁盘使用率超过此值自动清理旧 pcap
 
 
 class TLSKeyLogConfig(BaseSettings):

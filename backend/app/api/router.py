@@ -11,6 +11,7 @@ from app.api.geo import router as geo_router
 from app.api.ipfix import router as ipfix_router
 from app.api.security import router as security_router
 from app.api.profiles import router as profiles_router
+from app.api.packets import router as packets_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(traffic_router)
@@ -22,3 +23,4 @@ api_router.include_router(geo_router)
 api_router.include_router(ipfix_router)
 api_router.include_router(security_router)
 api_router.include_router(profiles_router)
+api_router.include_router(packets_router)

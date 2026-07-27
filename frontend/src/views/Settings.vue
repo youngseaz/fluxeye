@@ -24,6 +24,45 @@
       <el-skeleton :rows="3" animated v-else />
     </el-card>
 
+    <!-- 磁盘存储 -->
+    <el-card shadow="hover" style="margin-bottom: 16px">
+      <template #header><span class="card-title">磁盘存储</span></template>
+      <el-skeleton :rows="4" animated v-if="!storageInfo" />
+      <template v-else>
+        <div style="margin-bottom:10px;font-size:12px;color:#909399">
+          挂载点：<code>{{ storageInfo.mount_point }}</code>
+          <span style="margin-left:16px">数据目录：<code>{{ storageInfo.data_path }}</code></span>
+        </div>
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="总容量">{{ formatBytes(storageInfo.disk_total) }}</el-descriptions-item>
+          <el-descriptions-item label="已用">{{ formatBytes(storageInfo.disk_used) }}</el-descriptions-item>
+          <el-descriptions-item label="剩余">{{ formatBytes(storageInfo.disk_free) }}</el-descriptions-item>
+          <el-descriptions-item label="使用率">
+            <el-progress :percentage="storageInfo.disk_usage_percent" :stroke-width="14"
+              :status="storageInfo.disk_usage_percent > storageInfo.pcap_storage_threshold ? 'exception' : ''" />
+          </el-descriptions-item>
+          <el-descriptions-item label="数据实际占用">
+            {{ formatBytes(storageInfo.data_size_bytes) }}
+            <span style="color:#909399;font-size:11px;margin-left:4px">
+              (占挂载点 {{ (storageInfo.data_size_bytes / storageInfo.disk_total * 100).toFixed(2) }}%)
+            </span>
+          </el-descriptions-item>
+          <el-descriptions-item label="pcap 文件数 / 大小">
+            {{ storageInfo.pcap_files }} 个 / {{ formatBytes(storageInfo.pcap_size_bytes) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="清理阈值">
+            <el-input-number v-model="cleanupThreshold" :min="10" :max="99" size="small" style="width: 100px" />
+            <el-button size="small" style="margin-left: 6px" type="primary" @click="saveCleanupThreshold">保存</el-button>
+          </el-descriptions-item>
+          <el-descriptions-item label="手动清理">
+            <el-button size="small" :loading="cleaning" @click="triggerCleanup" :disabled="storageInfo.pcap_files === 0">
+              {{ cleaning ? '清理中...' : '清理旧 pcap' }}
+            </el-button>
+          </el-descriptions-item>
+        </el-descriptions>
+      </template>
+    </el-card>
+
     <!-- 存储配置 -->
     <el-card shadow="hover" style="margin-bottom: 16px">
       <template #header><span class="card-title">存储配置</span></template>
@@ -258,11 +297,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
+import axios from 'axios'
 import { fetchSystemStatus, fetchGeoConfig, updateGeoConfig, fetchGeoDatabases, uploadGeoDatabase, deleteGeoDatabase, triggerGeoUpdate as apiTriggerGeoUpdate } from '@/services/api'
 import { Refresh } from '@element-plus/icons-vue'
 import type { SystemStatus, GeoConfigInfo, GeoUpdateStatus } from '@/types'
-import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const status = ref<SystemStatus | null>(null)
@@ -273,6 +312,35 @@ const pcapEnabled = ref(false)
 const tlsKeylogAvailable = ref(false)
 const tlsKeyCount = ref(0)
 const geoUpdating = ref(false)
+
+// ── 磁盘存储 ────────────────────────────────────────
+const storageInfo = ref<any>(null)
+const cleanupThreshold = ref(90)
+const cleaning = ref(false)
+
+async function fetchStorageInfo() {
+  try {
+    const { data } = await axios.get('/api/v1/system/storage')
+    storageInfo.value = data
+    cleanupThreshold.value = data.pcap_storage_threshold
+  } catch { /* ignore */ }
+}
+
+async function saveCleanupThreshold() {
+  try {
+    await axios.post('/api/v1/system/pcap/config', { storage_threshold_percent: cleanupThreshold.value })
+    await fetchStorageInfo()
+  } catch { /* ignore */ }
+}
+
+async function triggerCleanup() {
+  cleaning.value = true
+  try {
+    await axios.post('/api/v1/system/pcap/cleanup')
+    await fetchStorageInfo()
+  } catch { /* ignore */ }
+  cleaning.value = false
+}
 
 // GeoIP 配置
 const geoConfig = reactive<GeoConfigInfo>({
@@ -444,6 +512,7 @@ onMounted(async () => {
   await fetchGeoStatus()
   await fetchGeoConfigData()
   await fetchGeoDatabasesList()
+  await fetchStorageInfo()
   await fetchIpfixStatus()
 
   // 检测 nDPI
