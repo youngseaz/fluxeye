@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="`报文详情 - #${flowId}`" width="95%" destroy-on-close top="2vh">
+  <el-dialog :model-value="visible" @update:model-value="emit('update:visible', $event)" :title="`报文详情 - #${flowId}`" width="95%" destroy-on-close top="2vh">
     <template v-if="loading">
       <el-skeleton :rows="6" animated />
     </template>
@@ -53,7 +53,12 @@
             <el-button size="small" @click="copyHex">复制 HEX</el-button>
           </div>
         </template>
-        <pre class="hex-dump"><code>{{ formatHexDump(selectedPacket.raw_hex) }}</code></pre>
+        <pre class="hex-dump"><code v-html="formatHexDump(selectedPacket.raw_hex)"></code></pre>
+        <div class="hex-legend">
+          <span class="legend-addr">偏移</span>
+          <span class="legend-ascii">可见字符</span>
+          <span class="legend-hex">十六进制</span>
+        </div>
       </el-card>
     </template>
   </el-dialog>
@@ -111,12 +116,17 @@ function formatHexDump(hex: string): string {
   const lines: string[] = []
   for (let i = 0; i < hex.length; i += 64) {
     const addr = (i / 2).toString(16).padStart(8, '0')
-    const hexPart = hex.slice(i, i + 64).replace(/(.{2})/g, '$1 ').trim()
-    const asciiPart = hex.slice(i, i + 64).replace(/.{2}/g, (b) => {
+    const hexBytes = hex.slice(i, i + 64)
+    const hexPart = hexBytes.replace(/(.{2})/g, '$1 ').trim()
+    const asciiPart = hexBytes.replace(/.{2}/g, (b) => {
       const c = parseInt(b, 16)
       return c >= 32 && c <= 126 ? String.fromCharCode(c) : '.'
     })
-    lines.push(`${addr}  ${hexPart.padEnd(48)}  ${asciiPart}`)
+    lines.push(
+      `<span class="addr-col">${addr}</span>  ` +
+      `<span class="ascii-col">${asciiPart.padEnd(16)}</span>  ` +
+      `<span class="hex-col">${hexPart.padEnd(48)}</span>`
+    )
   }
   return lines.join('\n')
 }
@@ -138,8 +148,19 @@ watch(() => props.visible, (v) => { if (v) fetchPackets() })
 .hex-header { display: flex; justify-content: space-between; align-items: center; }
 .hex-dump {
   background: #1e1e1e; color: #d4d4d4; padding: 12px;
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   font-size: 12px; line-height: 1.6; overflow-x: auto;
   border-radius: 4px; margin: 0; max-height: 400px; overflow-y: auto;
 }
+.hex-dump .ascii-col { color: #67c23a; }
+.hex-dump .hex-col { color: #e6a23c; }
+.hex-dump .addr-col { color: #909399; }
+.hex-legend {
+  display: flex; gap: 24px; margin-top: 8px; padding: 4px 12px;
+  font-size: 11px; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  background: #252526; border-radius: 4px; color: #909399;
+}
+.hex-legend .legend-addr { color: #909399; }
+.hex-legend .legend-ascii { color: #67c23a; margin-left: 55px; }
+.hex-legend .legend-hex { color: #e6a23c; margin-left: 98px; }
 </style>

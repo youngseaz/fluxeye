@@ -229,7 +229,7 @@ async def start_pcap_recording(req: PcapRecordingStartRequest = PcapRecordingSta
         pipeline = new_pipeline
 
     ok = pipeline.start_pcap_recording(
-        output_dir=settings.collector.pcap_output.dir,
+        output_dir=str(_get_capture_dir()),
         max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
         max_file_count=settings.collector.pcap_output.max_file_count,
         bpf_filter=req.bpf_filter,
@@ -290,8 +290,9 @@ class PcapFileInfo(BaseModel):
 
 
 def _get_capture_dir() -> Path:
-    """获取 pcap 输出目录。"""
-    return Path(settings.collector.pcap_output.dir)
+    """获取录制 pcap 的存储目录（与缓存目录分开）。"""
+    cache_dir = Path(settings.collector.pcap_output.dir)
+    return cache_dir.parent  # ./data/captures/
 
 
 @router.get("/pcap-files", response_model=list[PcapFileInfo])

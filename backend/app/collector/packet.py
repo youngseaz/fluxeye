@@ -393,7 +393,23 @@ def extract_host(payload: bytes, l7_proto: str) -> str:
         except Exception:
             pass
         return ""
-    # 通用检测：SOCKS CONNECT、HTTP 请求行等
+    # SOCKS5: 从 CONNECT 请求中提取目标域名/IP
+    if l7_proto.lower() in ("socks", "socks5", "unknown"):
+        # 查找 SOCKS5 CONNECT 请求: 05 01 00 atyp ...
+        for offset in range(0, len(payload) - 6):
+            if payload[offset:offset + 3] == b'\x05\x01\x00':
+                atyp = payload[offset + 3]
+                if atyp == 3:  # 域名
+                    name_len = payload[offset + 4]
+                    end = offset + 5 + name_len
+                    if end <= len(payload):
+                        return payload[offset + 5:end].decode("utf-8", errors="replace")
+                elif atyp == 1:  # IPv4
+                    if offset + 10 <= len(payload):
+                        return ".".join(str(b) for b in payload[offset + 4:offset + 8])
+                break
+    # 通用检测：HTTP CONNECT、HTTP 请求行等
+    # 通用检测：HTTP CONNECT、HTTP 请求行等
     try:
         text = payload.decode("utf-8", errors="replace")
         # SOCKS CONNECT host:port HTTP/1.1

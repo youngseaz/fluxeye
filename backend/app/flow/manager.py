@@ -50,6 +50,8 @@ class FlowManager:
             existing.duration_ms = max(0, delta_ms)  # 确保非负
             if flow.l7_meta:
                 existing.l7_meta = flow.l7_meta
+            if flow.dst_host:
+                existing.dst_host = flow.dst_host
             return None
         else:
             flow.first_seen = flow.timestamp

@@ -69,19 +69,20 @@ async def get_storage_info():
     """获取磁盘存储使用情况。
 
     统计规则：
-    - pcap_dir = 配置的 pcap 输出目录
-    - data_path = pcap_dir 的父级 data/ 目录（或 pcap_dir 本身）
+    - pcap_dir = 配置的 pcap 缓存目录
+    - data_path = pcap_dir 的父级 data/ 目录
     - mount_point = data_path 所在的挂载点
     - disk_total/used/free = 该挂载点的分区统计
     - data_size_bytes = data_path 目录下所有文件实际总大小
     """
     pcap_dir_raw = settings.collector.pcap_output.dir
     pcap_dir = Path(pcap_dir_raw).resolve()
+    # 录制目录 = 缓存目录的父级
+    record_dir = pcap_dir.parent.resolve() if pcap_dir.name == "cache" else pcap_dir
 
-    # 确定 data 目录（pcap_dir 的父级，保证存在）
-    data_path = pcap_dir.parent if pcap_dir.name == "captures" else pcap_dir
+    # 确定 data 目录
+    data_path = pcap_dir.parent.parent if pcap_dir.name == "cache" else pcap_dir.parent
     if not data_path.exists():
-        # 回退到 project 根目录下的 data/
         data_path = Path(pcap_dir_raw).parent.resolve()
     if not data_path.exists():
         data_path = Path.cwd()
@@ -93,13 +94,17 @@ async def get_storage_info():
     # 计算 data 目录实际占用
     data_size = _dir_size(data_path) if data_path.exists() else 0
 
-    # 统计 pcap 文件
+    # 统计 pcap 文件（缓存 + 录制）
     pcap_files = 0
     pcap_size = 0
-    if pcap_dir.exists():
-        for f in pcap_dir.glob("*.pcap"):
-            pcap_files += 1
-            pcap_size += f.stat().st_size
+    for d in [pcap_dir, record_dir]:
+        if d.exists():
+            for f in d.glob("*.pcap"):
+                pcap_files += 1
+                try:
+                    pcap_size += f.stat().st_size
+                except OSError:
+                    continue
 
     return StorageInfo(
         mount_point=mount_point,

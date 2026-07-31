@@ -203,6 +203,7 @@ class PeerStat(BaseModel):
     bytes_total: int
     flow_count: int
     direction: str = ""
+    country: str = ""
 
 
 class DeviceProfile(BaseModel):
@@ -263,6 +264,8 @@ class Conversation(BaseModel):
     last_seen: Optional[datetime] = None
     # 目标主机/域名
     dst_host: str = ""
+    # 原始报文 pcap 文件
+    pcap_file: str = ""
     # GeoIP 字段
     dst_country: str = ""
     dst_region: str = ""

@@ -1543,12 +1543,14 @@ class SQLiteStore(StorageBackend):
     @staticmethod
     def _map_service(proto: str, host: str) -> str:
         """将 (l7_proto, dst_host) 映射为可读的服务名。"""
+        proto_lower = proto.lower()
+        host = host or ""
         # 特定基础协议直接返回（NTP、DHCP 等不走域名匹配）
         specific_protos = {"ntp", "dhcp", "mdns", "netbios", "ssdp"}
-        if proto in specific_protos:
+        if proto_lower in specific_protos:
             return proto.upper()
         # 非泛型协议直接使用（如 nDPI 检测出的 YouTube/Netflix）
-        if proto and proto not in ("tls", "ssl", "socks", "tcp", "unknown", "http"):
+        if proto and proto_lower not in ("tls", "ssl", "socks", "tcp", "unknown", "http"):
             return proto.upper()
         # 尝试域名映射
         if host:
@@ -1700,8 +1702,16 @@ class SQLiteStore(StorageBackend):
 
             top_services = []
             seen_services: set[str] = set()
+            _generic_protos = {"tcp", "udp", "tls", "ssl", "socks", "http", "https",
+                               "ntp", "dhcp", "dns", "mdns", "netbios", "ssdp", "icmp", "unknown"}
             for sr in await svc_cursor.fetchall():
-                svc_name = self._map_service(sr["l7_proto"] or "", sr["dst_host"] or "")
+                proto = sr["l7_proto"] or ""
+                host = sr["dst_host"] or ""
+                svc_name = self._map_service(proto, host)
+                if not svc_name or svc_name == proto.upper() or svc_name.lower() in _generic_protos:
+                    continue
+                if host.replace(".", "").isdigit() and svc_name == host:
+                    continue
                 if svc_name not in seen_services:
                     seen_services.add(svc_name)
                     top_services.append({
@@ -1787,18 +1797,20 @@ class SQLiteStore(StorageBackend):
         top_domains = [{"host": r["host"], "bytes": r["bytes"], "count": r["cnt"]}
                         for r in await cursor3.fetchall()]
 
-        # 通信对端
+        # 通信对端（含国家信息）
         cursor4 = await self._conn.execute(
             f"""SELECT
                       CASE WHEN src_ip = ? THEN dst_ip ELSE src_ip END AS peer,
                       SUM(bytes_sent + bytes_recv) AS bytes,
                       COUNT(*) AS cnt,
-                      CASE WHEN src_ip = ? THEN 'egress' ELSE 'ingress' END AS direction
+                      CASE WHEN src_ip = ? THEN 'egress' ELSE 'ingress' END AS direction,
+                      MAX(CASE WHEN src_ip = ? THEN dst_country ELSE src_ip END) AS country
                FROM flows WHERE timestamp_s >= ? AND ({where_clause}) AND src_ip != dst_ip
                GROUP BY peer ORDER BY bytes DESC LIMIT 10""",
-            (ip, ip, since_ts, ip, ip),
+            (ip, ip, ip, since_ts, ip, ip),
         )
-        top_peers = [PeerStat(ip=r["peer"], bytes_total=r["bytes"], flow_count=r["cnt"], direction=r["direction"])
+        top_peers = [PeerStat(ip=r["peer"], bytes_total=r["bytes"], flow_count=r["cnt"],
+                               direction=r["direction"], country=r["country"] if "country" in r.keys() else "")
                       for r in await cursor4.fetchall()]
 
         # 目标国家
@@ -1811,6 +1823,40 @@ class SQLiteStore(StorageBackend):
         )
         top_countries = [{"country": r["dst_country"], "bytes": r["bytes"], "count": r["cnt"]}
                           for r in await cursor5.fetchall()]
+
+        # 应用服务 TOP 10
+        cursor6 = await self._conn.execute(
+            f"""SELECT l7_proto, dst_host, SUM(bytes_sent + bytes_recv) AS bytes, COUNT(*) AS cnt
+               FROM flows WHERE timestamp_s >= ? AND ({where_clause})
+               GROUP BY l7_proto, dst_host ORDER BY bytes DESC LIMIT 20""",
+            (since_ts, ip, ip),
+        )
+        top_services = []
+        seen_services: set[str] = set()
+        # 过滤掉纯协议名和 IP 直连，只保留有意义的应用服务
+        _generic_protos = {"tcp", "udp", "tls", "ssl", "socks", "http", "https",
+                           "ntp", "dhcp", "dns", "mdns", "netbios", "ssdp", "icmp", "unknown"}
+
+        for sr in await cursor6.fetchall():
+            proto = sr["l7_proto"] or ""
+            host = sr["dst_host"] or ""
+            svc_name = self._map_service(proto, host)
+
+            # 过滤：纯协议回退（无域名映射）、IP 直连、空名称
+            if not svc_name or svc_name == proto.upper() or svc_name.lower() in _generic_protos:
+                continue
+            if host.replace(".", "").isdigit() and svc_name == host:
+                continue
+
+            if svc_name not in seen_services:
+                seen_services.add(svc_name)
+                top_services.append({
+                    "service": svc_name,
+                    "bytes": sr["bytes"],
+                    "count": sr["cnt"],
+                })
+                if len(top_services) >= 10:
+                    break
 
         first = datetime.fromtimestamp(row["first_seen"]) if row["first_seen"] else None
         last = datetime.fromtimestamp(row["last_seen"]) if row["last_seen"] else None
@@ -1854,6 +1900,7 @@ class SQLiteStore(StorageBackend):
             last_seen=last,
             active_seconds=int(active_secs),
             top_protocols=top_protos,
+            top_services=top_services,
             top_domains=top_domains,
             top_peers=top_peers,
             top_countries=top_countries,

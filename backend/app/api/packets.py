@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.collector.pcap_extract import extract_flow_packets
+from app.collector.pcap_extract import extract_flow_packets, reassemble_stream
 from app.storage.base import StorageBackend
 from app.storage.deps import get_storage
 from app.utils.logger import get_logger
@@ -71,13 +71,78 @@ async def get_flow_packets(
         dst_port=flow.dst_port,
         l4_proto=flow.l4_proto,
         packets=[PacketInfo(
-            timestamp=p["timestamp"],
+            timestamp=str(p["timestamp"]),
             raw_hex=p["raw_hex"],
             length=p["length"],
             summary=p["summary"],
         ) for p in packets],
         total=len(packets),
         pcap_file=pcap_file,
+    )
+
+
+class StreamResponse(BaseModel):
+    """TCP/UDP 流重组结果。"""
+    flow_id: int
+    src_ip: str
+    dst_ip: str
+    src_port: int
+    dst_port: int
+    l4_proto: str
+    client_data: str = ""       # HEX string
+    server_data: str = ""       # HEX string
+    client_packets: int = 0
+    server_packets: int = 0
+    total_bytes: int = 0
+    stream_closed: bool = False
+    error: str = ""
+
+
+@router.get("/flows/{flow_id}/stream", response_model=StreamResponse)
+async def get_flow_stream(
+    flow_id: int,
+    storage=Depends(get_storage),
+):
+    """重组 TCP/UDP/SCTP 流（类似 Wireshark Follow Stream）。
+
+    从 pcap 文件中提取指定流的所有数据包，
+    - TCP: 按 sequence number 排序去除重传后，双向拼接 payload
+    - UDP: 按时间戳排序后，双向拼接 payload
+    - SCTP: 按 DATA chunk 的 TSN 排序去重后，双向拼接 user data
+    """
+    flow = await storage.query_flow_by_id(flow_id)
+    if not flow:
+        raise HTTPException(404, "流记录不存在")
+    if flow.l4_proto.lower() not in ("tcp", "udp", "sctp"):
+        raise HTTPException(400, "仅支持 TCP/UDP/SCTP 协议")
+
+    pcap_file = getattr(flow, "pcap_file", "") or ""
+    if not pcap_file or not Path(pcap_file).exists():
+        raise HTTPException(404, "pcap 文件不存在或已被清理")
+
+    result = reassemble_stream(
+        pcap_path=pcap_file,
+        src_ip=flow.src_ip,
+        dst_ip=flow.dst_ip,
+        src_port=flow.src_port,
+        dst_port=flow.dst_port,
+        l4_proto=flow.l4_proto,
+    )
+
+    return StreamResponse(
+        flow_id=flow_id,
+        src_ip=flow.src_ip,
+        dst_ip=flow.dst_ip,
+        src_port=flow.src_port,
+        dst_port=flow.dst_port,
+        l4_proto=flow.l4_proto,
+        client_data=result.get("client_raw", ""),
+        server_data=result.get("server_raw", ""),
+        client_packets=result.get("client_packets", 0),
+        server_packets=result.get("server_packets", 0),
+        total_bytes=result.get("total_bytes", 0),
+        stream_closed=result.get("stream_closed", False),
+        error=result.get("error", ""),
     )
 
 

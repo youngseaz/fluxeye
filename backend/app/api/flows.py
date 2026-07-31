@@ -65,6 +65,7 @@ async def get_flow_detail(
         duration_ms=record.duration_ms,
         dst_host=record.dst_host,
         interface=record.interface,
+        pcap_file=record.pcap_file,
         first_seen=record.first_seen,
         last_seen=record.last_seen,
         dst_country=record.dst_country,

@@ -97,6 +97,8 @@ export interface Conversation {
   duration_ms: number
   l7_meta: string
   total_bytes: number
+  // 原始报文
+  pcap_file?: string
   // 抓包网卡
   interface?: string
   // 目标主机
@@ -200,6 +202,7 @@ export interface PeerStat {
   bytes_total: number
   flow_count: number
   direction: string
+  country?: string
 }
 
 export interface DeviceProfile {

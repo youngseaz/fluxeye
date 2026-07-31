@@ -93,8 +93,19 @@
               <span class="detail-name">{{ p.protocol }}</span>
               <span class="detail-bar-bg"><span class="detail-bar" :style="{ width: pct(p.bytes, totalBytes) + '%' }" /></span>
               <span class="detail-val">{{ formatBytes(p.bytes) }}</span>
+              <span class="detail-count">{{ p.count }} 条流</span>
             </div>
             <el-empty v-if="device.top_protocols.length === 0" description="暂无协议数据" :image-size="60" />
+          </el-tab-pane>
+
+          <el-tab-pane label="应用服务" name="services">
+            <div v-for="s in device.top_services" :key="s.service" class="detail-row">
+              <span class="detail-name">{{ s.service }}</span>
+              <span class="detail-bar-bg"><span class="detail-bar bar-cyan" :style="{ width: pct(s.bytes, totalBytes) + '%' }" /></span>
+              <span class="detail-val">{{ formatBytes(s.bytes) }}</span>
+              <span class="detail-count">{{ s.count }} 条流</span>
+            </div>
+            <el-empty v-if="device.top_services.length === 0" description="暂无应用服务数据" :image-size="60" />
           </el-tab-pane>
 
           <el-tab-pane label="访问域名" name="domains">
@@ -108,7 +119,11 @@
 
           <el-tab-pane label="通信对端" name="peers">
             <div v-for="p in device.top_peers" :key="p.ip" class="detail-row">
-              <span class="detail-name">{{ p.ip }}</span>
+              <span class="detail-name">
+                <span v-if="p.country" :class="['fi', 'fi-' + p.country.toLowerCase(), 'geo-flag-icon']" style="margin-right:4px"></span>
+                <span v-if="p.country" style="color:#909399;font-size:11px;margin-right:4px">{{ countryName(p.country) }}</span>
+                {{ p.ip }}
+              </span>
               <el-tag size="small" :type="p.direction === 'egress' ? 'primary' : 'success'" style="margin:0 6px">
                 {{ p.direction === 'egress' ? '→ 出' : '← 入' }}
               </el-tag>
@@ -116,15 +131,6 @@
               <span class="detail-val">{{ formatBytes(p.bytes_total) }}</span>
             </div>
             <el-empty v-if="device.top_peers.length === 0" description="暂无对端数据" :image-size="60" />
-          </el-tab-pane>
-
-          <el-tab-pane label="目标地区" name="countries">
-            <div v-for="c in device.top_countries" :key="c.country" class="detail-row">
-              <span class="detail-name">{{ countryFlag(c.country) }} {{ countryName(c.country) }}</span>
-              <span class="detail-bar-bg"><span class="detail-bar bar-purple" :style="{ width: pct(c.bytes, totalBytes) + '%' }" /></span>
-              <span class="detail-val">{{ formatBytes(c.bytes) }}</span>
-            </div>
-            <el-empty v-if="device.top_countries.length === 0" description="暂无地区数据" :image-size="60" />
           </el-tab-pane>
         </el-tabs>
       </el-card>
@@ -266,5 +272,7 @@ onMounted(fetchDevice)
 .bar-green { background: #67c23a; }
 .bar-orange { background: #e6a23c; }
 .bar-purple { background: #9b59b6; }
+.bar-cyan { background: #00bcd4; }
 .detail-val { flex: 0 0 80px; text-align: right; font-family: 'SF Mono', monospace; font-size: 12px; color: #606266; }
+.detail-count { flex: 0 0 70px; text-align: right; font-size: 11px; color: #909399; }
 </style>
