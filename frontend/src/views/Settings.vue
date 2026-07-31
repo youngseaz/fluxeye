@@ -24,9 +24,22 @@
       <el-skeleton :rows="3" animated v-else />
     </el-card>
 
-    <!-- 磁盘存储 -->
+    <!-- 数据缓存 -->
     <el-card shadow="hover" style="margin-bottom: 16px">
-      <template #header><span class="card-title">磁盘存储</span></template>
+      <template #header><span class="card-title">数据缓存</span></template>
+      <div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div style="font-size:13px">
+          缓存数据包
+          <el-tag size="small" :type="cacheEnabled ? 'success' : 'info'" style="margin-left:8px">
+            {{ cacheEnabled ? '已开启' : '已关闭' }}
+          </el-tag>
+          <div style="color:#909399;font-size:11px;margin-top:4px">
+            开启后系统会缓存经过的原始数据包（pcap），供报文查看与流追踪使用
+          </div>
+        </div>
+        <el-switch v-model="cacheEnabled" :loading="cacheSaving" @change="saveCacheEnabled" />
+      </div>
+      <el-divider style="margin:4px 0 12px" />
       <el-skeleton :rows="4" animated v-if="!storageInfo" />
       <template v-else>
         <div style="margin-bottom:10px;font-size:12px;color:#909399">
@@ -87,14 +100,34 @@
     <el-card shadow="hover" style="margin-bottom: 16px">
       <template #header><span class="card-title">采集配置</span></template>
       <el-form label-width="120px" size="small">
-        <el-form-item label="采集网卡">
-          <el-input v-model="interfaceName" placeholder="eth0（留空则不启动）" disabled>
-            <template #append>
-              <el-tag size="small" :type="status?.collector_running ? 'success' : 'info'">
-                {{ status?.collector_running ? '已启动' : '未启动' }}
-              </el-tag>
-            </template>
-          </el-input>
+        <el-form-item label="采集网口">
+          <el-select v-model="selectedInterfaces" multiple collapse-tags collapse-tags-tooltip
+            placeholder="选择要抓包的网卡（可多选）" style="width: 280px"
+            :loading="interfacesLoading" :disabled="status?.collector_running">
+            <el-option
+              v-for="iface in interfaces"
+              :key="iface.name"
+              :label="iface.name + (iface.ip ? ' (' + iface.ip + ')' : '') + (iface.is_loopback ? ' [回环]' : '')"
+              :value="iface.name"
+            />
+          </el-select>
+          <el-tag size="small" :type="status?.collector_running ? 'success' : 'info'" style="margin-left: 8px">
+            {{ status?.collector_running ? '抓包中' : '未抓包' }}
+          </el-tag>
+          <span v-if="status?.collector_running && currentInterface" style="color:#909399;font-size:12px;margin-left:8px">
+            当前: {{ currentInterface }}
+          </span>
+        </el-form-item>
+        <el-form-item label=" ">
+          <el-button type="success" size="small" @click="startCapture" :disabled="status?.collector_running || selectedInterfaces.length === 0">
+            启动抓包
+          </el-button>
+          <el-button type="danger" size="small" @click="stopCapture" :disabled="!status?.collector_running">
+            停止抓包
+          </el-button>
+          <el-button size="small" @click="fetchInterfaces" :loading="interfacesLoading">
+            刷新网口
+          </el-button>
         </el-form-item>
         <el-form-item label="nDPI 状态">
           <el-tag type="success" size="small" v-if="ndpiAvailable">已加载</el-tag>
@@ -306,15 +339,79 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const status = ref<SystemStatus | null>(null)
 const targetBackend = ref('sqlite')
-const interfaceName = ref('')
+
+// ── 采集网口配置 ────────────────────────────────────
+const interfaces = ref<any[]>([])
+const selectedInterfaces = ref<string[]>([])
+const currentInterface = ref('')
+const interfacesLoading = ref(false)
+
+async function fetchInterfaces() {
+  interfacesLoading.value = true
+  try {
+    const { data } = await axios.get('/api/v1/capture/interfaces')
+    interfaces.value = (data || []).filter((i: any) => !i.is_loopback)
+    // 清理已失效的选中项
+    const validNames = new Set(interfaces.value.map((i: any) => i.name))
+    selectedInterfaces.value = selectedInterfaces.value.filter((n) => validNames.has(n))
+    // 默认选中第一个
+    if (selectedInterfaces.value.length === 0 && interfaces.value.length > 0) {
+      selectedInterfaces.value = [interfaces.value[0].name]
+    }
+  } catch {
+    interfaces.value = []
+  }
+  interfacesLoading.value = false
+}
+
+async function startCapture() {
+  if (selectedInterfaces.value.length === 0) {
+    ElMessage.warning('请先选择采集网口')
+    return
+  }
+  try {
+    const { data } = await axios.post('/api/v1/capture/start', { interface: selectedInterfaces.value.join(',') })
+    ElMessage.success(data.message || '抓包已启动')
+    currentInterface.value = selectedInterfaces.value.join(',')
+    await refreshStatus()
+  } catch (e: any) {
+    ElMessage.error('启动抓包失败: ' + (e?.response?.data?.detail || e?.message))
+  }
+}
+
+async function stopCapture() {
+  try {
+    const { data } = await axios.post('/api/v1/capture/stop')
+    ElMessage.success(data.message || '抓包已停止')
+    currentInterface.value = ''
+    await refreshStatus()
+  } catch (e: any) {
+    ElMessage.error('停止抓包失败: ' + (e?.response?.data?.detail || e?.message))
+  }
+}
+
+async function refreshStatus() {
+  try {
+    status.value = await fetchSystemStatus()
+    targetBackend.value = status.value.storage_backend
+    currentInterface.value = (status.value as any)?.interface || ''
+    // 同步当前抓包网口到选择器
+    if (currentInterface.value) {
+      selectedInterfaces.value = currentInterface.value.split(',')
+    }
+  } catch { /* ignore */ }
+}
+
 const ndpiAvailable = ref(false)
 const pcapEnabled = ref(false)
 const tlsKeylogAvailable = ref(false)
 const tlsKeyCount = ref(0)
 const geoUpdating = ref(false)
 
-// ── 磁盘存储 ────────────────────────────────────────
+// ── 数据缓存 ────────────────────────────────────────
 const storageInfo = ref<any>(null)
+const cacheEnabled = ref(false)
+const cacheSaving = ref(false)
 const cleanupThreshold = ref(90)
 const cleaning = ref(false)
 
@@ -324,13 +421,41 @@ async function fetchStorageInfo() {
     storageInfo.value = data
     cleanupThreshold.value = data.pcap_storage_threshold
   } catch { /* ignore */ }
+  try {
+    const { data } = await axios.get('/api/v1/system/pcap/config')
+    cacheEnabled.value = data.enabled ?? true
+  } catch { /* ignore */ }
+}
+
+async function saveCacheEnabled() {
+  cacheSaving.value = true
+  try {
+    const { data } = await axios.post('/api/v1/system/pcap/config', {
+      enabled: cacheEnabled.value,
+      storage_threshold_percent: cleanupThreshold.value,
+    })
+    ElMessage.success(data.message || (cacheEnabled.value ? '已开启数据包缓存' : '已关闭数据包缓存'))
+    // 缓存开关变化后，采集流水线会重启，刷新系统状态
+    await refreshStatus()
+    await fetchStorageInfo()
+  } catch (e: any) {
+    ElMessage.error('更新缓存配置失败: ' + (e?.response?.data?.detail || e?.message))
+    await fetchStorageInfo()
+  }
+  cacheSaving.value = false
 }
 
 async function saveCleanupThreshold() {
   try {
-    await axios.post('/api/v1/system/pcap/config', { storage_threshold_percent: cleanupThreshold.value })
+    const { data } = await axios.post('/api/v1/system/pcap/config', {
+      enabled: cacheEnabled.value,
+      storage_threshold_percent: cleanupThreshold.value,
+    })
+    ElMessage.success(data.message || '清理阈值已保存')
     await fetchStorageInfo()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error('保存阈值失败: ' + (e?.response?.data?.detail || e?.message))
+  }
 }
 
 async function triggerCleanup() {
@@ -502,12 +627,8 @@ async function triggerGeoUpdate() {
 }
 
 onMounted(async () => {
-  try {
-    status.value = await fetchSystemStatus()
-    targetBackend.value = status.value.storage_backend
-  } catch {
-    // 开发环境下可能无后端
-  }
+  await refreshStatus()
+  await fetchInterfaces()
 
   await fetchGeoStatus()
   await fetchGeoConfigData()

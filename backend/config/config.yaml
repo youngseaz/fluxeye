@@ -30,7 +30,7 @@ storage:
     password: ""
 
 collector:
-  interface: "eth0"
+  interface: ""
   bpf_filter: ""
   snap_len: 65535
   promisc: true
@@ -43,7 +43,7 @@ collector:
     max_file_size_mb: 10
     max_file_count: 20
   tls_keylog:
-    filepath: ""
+    filepath: ./data/tls_keys.log
     auto_reload: true
     reload_interval: 5.0
 

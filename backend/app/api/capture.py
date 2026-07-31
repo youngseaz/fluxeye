@@ -114,7 +114,7 @@ async def get_capture_status():
         uptime_seconds=pipeline.uptime_seconds,
         active_flows=pipeline.flow_manager.active_count,
         dpi_available=pipeline.dpi.is_available if pipeline.dpi else False,
-        pcap_output_enabled=pipeline.pcap_writer is not None,
+        pcap_output_enabled=pipeline.cache_writer is not None,
     )
 
 

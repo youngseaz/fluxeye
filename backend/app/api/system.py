@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.config import settings
 from app.models.schemas import SystemStatus, StorageInfo, PcapCleanupConfig
-from app.pipeline_manager import get_pipeline
+from app.pipeline_manager import get_pipeline, set_pipeline
 from app.storage.deps import get_storage
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ async def get_system_status():
         storage_backend=storage.__class__.__name__.replace("Store", "").lower(),
         collector_running=pipeline.is_running if pipeline else False,
         flows_cached=pipeline.flow_manager.active_count if pipeline else 0,
+        interface=pipeline.interface if pipeline else "",
         version=settings.app.version,
     )
 
@@ -157,17 +158,76 @@ async def trigger_pcap_cleanup():
 
 @router.get("/system/pcap/config", response_model=PcapCleanupConfig)
 async def get_pcap_cleanup_config():
-    """获取 pcap 清理配置。"""
+    """获取 pcap 缓存配置。"""
     return PcapCleanupConfig(
+        enabled=settings.collector.pcap_output.enabled,
         storage_threshold_percent=settings.collector.pcap_output.storage_threshold_percent,
     )
 
 
 @router.post("/system/pcap/config")
 async def update_pcap_cleanup_config(config: PcapCleanupConfig):
-    """更新 pcap 清理配置。"""
+    """更新 pcap 缓存配置（是否缓存数据包 + 清理阈值）。
+
+    修改缓存开关后，若采集流水线正在运行则自动重启使其生效。
+    """
     if not (10 <= config.storage_threshold_percent <= 99):
         raise HTTPException(400, "阈值必须在 10-99 之间")
-    settings.collector.pcap_output.storage_threshold_percent = config.storage_threshold_percent
-    logger.info("pcap 清理阈值已更新为 %d%%", config.storage_threshold_percent)
-    return {"message": f"pcap 清理阈值已更新为 {config.storage_threshold_percent}%", "success": True}
+
+    changed = False
+    if settings.collector.pcap_output.enabled != config.enabled:
+        settings.collector.pcap_output.enabled = config.enabled
+        changed = True
+        logger.info("数据包缓存已%s", "开启" if config.enabled else "关闭")
+
+    if settings.collector.pcap_output.storage_threshold_percent != config.storage_threshold_percent:
+        settings.collector.pcap_output.storage_threshold_percent = config.storage_threshold_percent
+        logger.info("pcap 清理阈值已更新为 %d%%", config.storage_threshold_percent)
+
+    # 缓存开关变化时，重启采集流水线使其生效
+    if changed:
+        await _restart_pipeline_for_config()
+
+    return {
+        "message": "数据包缓存配置已更新",
+        "enabled": settings.collector.pcap_output.enabled,
+        "storage_threshold_percent": settings.collector.pcap_output.storage_threshold_percent,
+        "success": True,
+    }
+
+
+async def _restart_pipeline_for_config():
+    """按当前配置重建并重启采集流水线（保持当前网口）。"""
+    pipeline = get_pipeline()
+    if not pipeline or not pipeline.is_running:
+        return
+    interface = pipeline.interface
+    try:
+        await pipeline.stop()
+    except Exception as e:
+        logger.warning("停止流水线失败: %s", e)
+
+    from app.collector.pipeline import CapturePipeline
+    from app.geo.deps import get_geo_resolver
+
+    storage = await get_storage()
+    geo_resolver = get_geo_resolver()
+    new_pipeline = CapturePipeline(
+        storage=storage,
+        interface=interface,
+        dpi_lib_path=settings.collector.dpi_lib_path,
+        flush_interval=settings.collector.flush_interval,
+        pcap_output_enabled=settings.collector.pcap_output.enabled,
+        pcap_output_dir=settings.collector.pcap_output.dir,
+        pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
+        pcap_max_file_count=settings.collector.pcap_output.max_file_count,
+        tls_keylog_file=settings.collector.tls_keylog.filepath,
+        geo_resolver=geo_resolver,
+        ipfix_enabled=settings.collector.ipfix.enabled,
+        ipfix_host=settings.collector.ipfix.host,
+        ipfix_port=settings.collector.ipfix.port,
+        ipfix_export_interval=settings.collector.ipfix.export_interval,
+    )
+    set_pipeline(new_pipeline)
+    await new_pipeline.start()
+    logger.info("已按新缓存配置重启采集流水线 (interface=%s)", interface)

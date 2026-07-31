@@ -27,14 +27,15 @@ SSLKEYLOGFILE 是 NSS (Firefox/Chrome/curl) 导出的 TLS 会话密钥文件。
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from app.utils.logger import get_logger
+
+logger = get_logger("collector.tls_keylog")
 
 # ── 密钥记录 ──────────────────────────────────────────
 

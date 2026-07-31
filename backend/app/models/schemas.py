@@ -299,6 +299,7 @@ class SystemStatus(BaseModel):
     collector_running: bool = False
     flows_cached: int = 0
     version: str = "0.1.0"
+    interface: str = ""
 
 
 # ── 存储状态 ──────────────────────────────────────────
@@ -320,4 +321,5 @@ class StorageInfo(BaseModel):
 
 class PcapCleanupConfig(BaseModel):
     """pcap 老化清理配置。"""
+    enabled: bool = True            # 是否缓存数据包
     storage_threshold_percent: int = 90

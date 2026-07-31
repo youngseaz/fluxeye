@@ -69,7 +69,10 @@ class CapturePipeline:
         self.capture: Optional[PacketCapture] = None
         self._capture_tasks: list[asyncio.Task] = []
         self.pcap_reader: Optional[PcapReader] = None
-        self.pcap_writer: Optional[PcapWriter] = None
+        # 自动缓存写入器（数据缓存开关控制，写入缓存目录）
+        self.cache_writer: Optional[PcapWriter] = None
+        # 手动录制写入器（实时会话中的「PCAP 录制」按钮控制）
+        self.recording_writer: Optional[PcapWriter] = None
         self._pcap_bpf_filter: str = ""
         self.tls_keylog: Optional[TLSKeyLogParser] = None
         self.flow_manager = FlowManager(idle_timeout=60)
@@ -80,9 +83,9 @@ class CapturePipeline:
             export_interval=ipfix_export_interval,
         ) if ipfix_enabled else None
 
-        # pcap 输出配置
+        # pcap 输出配置（数据缓存：自动写入缓存目录）
         if pcap_output_enabled:
-            self.pcap_writer = PcapWriter(
+            self.cache_writer = PcapWriter(
                 output_dir=pcap_output_dir,
                 max_file_size=pcap_max_file_size_mb * 1024 * 1024,
                 max_file_count=pcap_max_file_count,
@@ -145,10 +148,10 @@ class CapturePipeline:
                 asyncio.create_task(self._capture_loop(), name="capture")
             )
 
-        # 初始化 pcap 写入器
-        if self.pcap_writer:
-            self.pcap_writer.open()
-            logger.info("pcap 输出已启用: %s", self.pcap_writer.output_dir)
+        # 初始化数据缓存写入器
+        if self.cache_writer:
+            self.cache_writer.open()
+            logger.info("pcap 数据缓存已启用: %s", self.cache_writer.output_dir)
 
         # 启动定时刷流、统计、数据保留清理
         self._tasks.append(
@@ -191,9 +194,11 @@ class CapturePipeline:
             t.cancel()
         self._capture_tasks.clear()
 
-        # 关闭 pcap 写入器
-        if self.pcap_writer:
-            self.pcap_writer.close()
+        # 关闭数据缓存与手动录制写入器
+        if self.cache_writer:
+            self.cache_writer.close()
+        if self.recording_writer:
+            self.recording_writer.close()
 
         # 停止 IPFIX 导出
         if self.ipfix_exporter:
@@ -234,20 +239,19 @@ class CapturePipeline:
                        支持格式: "port 80", "port 443", "host 1.2.3.4",
                        "port 80 or port 443", "tcp", "udp"
         """
-        if self.pcap_writer is not None:
+        if self.recording_writer is not None:
             logger.info("PCAP 录制已在运行")
             return True
         self._pcap_bpf_filter = bpf_filter
         if bpf_filter:
             logger.info("PCAP 录制 BPF 过滤: %s", bpf_filter)
         try:
-            self.pcap_writer = PcapWriter(
+            self.recording_writer = PcapWriter(
                 output_dir=output_dir,
                 max_file_size=max_file_size_mb * 1024 * 1024,
                 max_file_count=max_file_count,
             )
-            self.pcap_writer.open()
-            self.pcap_output_enabled = True
+            self.recording_writer.open()
             logger.info("PCAP 录制已开启 -> %s", output_dir)
             return True
         except Exception as e:
@@ -256,13 +260,13 @@ class CapturePipeline:
 
     def stop_pcap_recording(self) -> bool:
         """动态关闭 PCAP 文件录制。"""
-        if self.pcap_writer is None:
+        if self.recording_writer is None:
             logger.info("PCAP 录制未运行")
             return True
         try:
-            self.pcap_writer.close()
-            self.pcap_writer = None
-            self.pcap_output_enabled = False
+            self.recording_writer.close()
+            self.recording_writer = None
+            self._pcap_bpf_filter = ""
             logger.info("PCAP 录制已关闭")
             return True
         except Exception as e:
@@ -271,7 +275,8 @@ class CapturePipeline:
 
     @property
     def pcap_recording(self) -> bool:
-        return self.pcap_writer is not None
+        """是否正在手动录制（与自动数据缓存无关）。"""
+        return self.recording_writer is not None
 
     # ── BPF 过滤 ────────────────────────────────────────
 
@@ -459,16 +464,20 @@ class CapturePipeline:
             dst_as_org=geo_as_org,
             dst_lat=geo_lat,
             dst_lon=geo_lon,
-            pcap_file=self.pcap_writer.current_file if self.pcap_writer else "",
+            pcap_file=(self.recording_writer or self.cache_writer).current_file
+            if (self.recording_writer or self.cache_writer) else "",
         )
 
-        # pcap 文件输出（类似 tcpdump -w），支持 BPF 过滤
-        if self.pcap_writer:
+        # pcap 数据缓存输出（自动，无过滤）
+        if self.cache_writer:
+            self.cache_writer.write(pkt)
+        # pcap 手动录制输出（支持 BPF 过滤）
+        if self.recording_writer:
             if self._pcap_bpf_filter:
                 if self._match_bpf(pkt, self._pcap_bpf_filter):
-                    self.pcap_writer.write(pkt)
+                    self.recording_writer.write(pkt)
             else:
-                self.pcap_writer.write(pkt)
+                self.recording_writer.write(pkt)
 
         # 更新流管理器
         self.flow_manager.update(flow)
