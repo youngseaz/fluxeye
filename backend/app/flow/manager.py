@@ -61,12 +61,18 @@ class FlowManager:
             return None
 
     def flush_idle(self) -> list[FlowRecord]:
-        """清除超时流，返回已关闭的流列表。"""
+        """清除超时流，返回已关闭的流列表。
+
+        基于「最后活动时间 last_seen」判断是否空闲，而不是流的首次时间戳
+        timestamp——否则长连接(> idle_timeout 秒)即使持续有流量也会被误清，
+        导致实时会话出现断档/空列表。
+        """
         now = datetime.now(timezone.utc)
         expired = []
         keys_to_delete = []
         for key, flow in self._flows.items():
-            if (now - flow.timestamp).total_seconds() > self.idle_timeout:
+            last_activity = flow.last_seen or flow.timestamp
+            if (now - last_activity).total_seconds() > self.idle_timeout:
                 # 刷出时重新计算时长，确保准确
                 first = self._first_seen.get(key, flow.timestamp)
                 delta_ms = int((now - first).total_seconds() * 1000)

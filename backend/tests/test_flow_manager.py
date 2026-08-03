@@ -114,6 +114,42 @@ class TestFlowIdleTimeout:
         assert len(expired) == 1
         assert fm.active_count == 0
 
+    def test_long_lived_active_flow_not_flushed(self):
+        """长连接持续有流量时不应被误清（回归测试）。
+
+        流首次出现超过 idle_timeout，但最近仍有活动（last_seen 较新），
+        必须保留在活跃列表，否则实时会话会断档/返回空列表。
+        """
+        fm = FlowManager(idle_timeout=60)
+        now = datetime.now(timezone.utc)
+
+        # 首次出现在 120 秒前（长连接）
+        fm.update(FlowRecord(
+            timestamp=now - timedelta(seconds=120),
+            src_ip="10.0.0.1", dst_ip="192.168.1.1",
+            src_port=40000, dst_port=443, l4_proto="tcp", l7_proto="tls",
+            bytes_sent=100, bytes_recv=200, packets_sent=1, packets_recv=2,
+            l7_meta="", duration_ms=1000,
+        ))
+
+        # 之后持续有流量（模拟 update 更新 last_seen）
+        for _ in range(5):
+            fm.update(FlowRecord(
+                timestamp=now - timedelta(seconds=100),  # 首次时间戳保持旧值
+                src_ip="10.0.0.1", dst_ip="192.168.1.1",
+                src_port=40000, dst_port=443, l4_proto="tcp", l7_proto="tls",
+                bytes_sent=10, bytes_recv=20, packets_sent=1, packets_recv=1,
+                l7_meta="", duration_ms=1000,
+            ))
+
+        # 模拟最后一次活动在 5 秒前
+        flow = list(fm._flows.values())[0]
+        flow.last_seen = now - timedelta(seconds=5)
+
+        expired = fm.flush_idle()
+        assert len(expired) == 0, "持续活跃的长连接不应被误清除"
+        assert fm.active_count == 1
+
     def test_active_flow_not_expired(self):
         """活跃流不应被误清除。"""
         fm = FlowManager(idle_timeout=3600)  # 1 小时超时
