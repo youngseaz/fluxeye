@@ -69,11 +69,41 @@ async def lifespan(app: FastAPI):
     set_pipeline(pipeline)
     await pipeline.start()
 
+    # 若配置未指定网口，尝试从上次保存的状态自动恢复抓包
+    # （解决开发热重载/重启后 /traffic/live 长时间空列表的问题）
+    if not settings.collector.interface and not settings.collector.pcap_file:
+        from app.collector.capture_state import load_capture_state
+
+        saved = load_capture_state()
+        saved_iface = (saved.get("interface") or "").strip()
+        if saved_iface and saved.get("running"):
+            logger.info("检测到上次抓包状态，自动恢复抓包: %s", saved_iface)
+            resume_pipeline = CapturePipeline(
+                storage=storage,
+                interface=saved_iface,
+                pcap_file="",
+                dpi_lib_path=settings.collector.dpi_lib_path,
+                flush_interval=settings.collector.flush_interval,
+                pcap_output_enabled=settings.collector.pcap_output.enabled,
+                pcap_output_dir=settings.collector.pcap_output.dir,
+                pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
+                pcap_max_file_count=settings.collector.pcap_output.max_file_count,
+                tls_keylog_file=settings.collector.tls_keylog.filepath,
+                geo_resolver=geo_resolver,
+                ipfix_enabled=settings.collector.ipfix.enabled,
+                ipfix_host=settings.collector.ipfix.host,
+                ipfix_port=settings.collector.ipfix.port,
+                ipfix_export_interval=settings.collector.ipfix.export_interval,
+            )
+            set_pipeline(resume_pipeline)
+            await resume_pipeline.start()
+
     yield
 
     # 关闭时：停止采集流水线 → 清理存储 → 关闭 GeoIP
     stop_auto_update()
-    await pipeline.stop()
+    current = get_pipeline() or pipeline
+    await current.stop()
     set_pipeline(None)  # type: ignore[arg-type]
     await close_storage()
     close_geo_resolver()

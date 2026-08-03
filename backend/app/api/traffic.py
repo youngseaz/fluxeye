@@ -21,6 +21,9 @@ from app.models.schemas import (
 from app.pipeline_manager import get_active_flows, get_pipeline
 from app.storage.base import StorageBackend
 from app.storage.deps import get_storage
+from app.utils.logger import get_logger
+
+logger = get_logger("api.traffic")
 
 router = APIRouter(tags=["traffic"])
 
@@ -39,6 +42,23 @@ async def get_live_sessions(
     支持按协议、IP、端口、国家等条件过滤。
     """
     flows = get_active_flows()
+
+    # 诊断：当活跃流为空但采集器在运行时记录上下文，定位"返回空列表"问题
+    if not flows:
+        from app.pipeline_manager import get_pipeline
+        import time as _time
+        _pl = get_pipeline()
+        if _pl is not None and _pl.is_running:
+            logger.warning(
+                "[DIAG] /traffic/live 返回空但采集器运行中: "
+                "running=%s active_count=%d packets=%d uptime=%.1fs "
+                "interface=%s start_time=%.1f",
+                _pl.is_running, _pl.flow_manager.active_count,
+                _pl.packets_processed, _pl.uptime_seconds,
+                _pl.interface,
+                _pl._start_time,
+            )
+
 
     # 客户端过滤
     if l7_proto:

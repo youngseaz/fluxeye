@@ -164,6 +164,11 @@ async def start_capture(req: CaptureStartRequest):
     set_pipeline(new_pipeline)
     await new_pipeline.start()
 
+    # 持久化抓包状态，供后端重启后自动恢复
+    if interface:
+        from app.collector.capture_state import save_capture_state
+        save_capture_state(interface, running=True)
+
     logger.info("抓包已启动: interface=%s pcap=%s", interface, req.pcap_file)
     return {
         "message": "抓包已启动",
@@ -180,6 +185,9 @@ async def stop_capture():
         return {"message": "抓包未运行"}
 
     await pipeline.stop()
+    # 显式停止抓包：记录状态以便后续启动时不再自动恢复
+    from app.collector.capture_state import save_capture_state
+    save_capture_state(pipeline.interface, running=False)
     logger.info("抓包已停止")
     return {"message": "抓包已停止", "packets_processed": pipeline.packets_processed}
 

@@ -84,6 +84,12 @@ class FlowManager:
             del self._flows[key]
             self._first_seen.pop(key, None)
         self._last_flushed_keys = keys_to_delete
+        if len(expired) >= 50:
+            from app.utils.logger import get_logger
+            get_logger("flow.manager").warning(
+                "[DIAG] 单次刷出大量空闲流: %d 条 (剩余活跃 %d), idle_timeout=%ds — 可能是流量骤停或误清",
+                len(expired), len(self._flows), self.idle_timeout,
+            )
         return expired
 
     def get_last_flushed_keys(self) -> list[str]:
