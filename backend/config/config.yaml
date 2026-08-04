@@ -36,6 +36,7 @@ collector:
   promisc: true
   pcap_file: ""
   flush_interval: 5.0
+  idle_timeout: 120
   dpi_lib_path: "libndpi_helper.so"
   pcap_output:
     enabled: true

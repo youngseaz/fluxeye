@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:  # Windows 等无 fcntl 平台
+    fcntl = None
+    _HAS_FCNTL = False
 
 import uvicorn
 from contextlib import asynccontextmanager
@@ -33,6 +41,34 @@ logger = init_logging(
 )
 
 
+def _try_acquire_capture_lock() -> int | None:
+    """多 worker 场景下，仅一个 worker 运行采集流水线。
+
+    通过非阻塞文件锁实现"领导者"选举：抢到锁的 worker 负责抓包/DPI/写库，
+    其余 worker 仅提供 API。避免多个 worker 重复抓同一镜像口导致：
+      - 流记录重复入库
+      - RRD 时序文件互相锁冲突 (could not lock RRD)
+    返回持有锁的 fd；锁已被占用返回 None；无 fcntl 平台返回 -1（单进程始终采集）。
+    """
+    if not _HAS_FCNTL:
+        return -1
+    lock_path = Path(settings.storage.sqlite.path).parent / "capture.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    # 写入持有者 PID，便于排查
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+    except OSError:
+        pass
+    return fd
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理。"""
@@ -48,63 +84,76 @@ async def lifespan(app: FastAPI):
     # 启动 GeoIP 数据库自动更新
     start_auto_update()
 
-    # 启动采集流水线
-    pipeline = CapturePipeline(
-        storage=storage,
-        interface=settings.collector.interface,
-        pcap_file=settings.collector.pcap_file,
-        dpi_lib_path=settings.collector.dpi_lib_path,
-        flush_interval=settings.collector.flush_interval,
-        pcap_output_enabled=settings.collector.pcap_output.enabled,
-        pcap_output_dir=settings.collector.pcap_output.dir,
-        pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
-        pcap_max_file_count=settings.collector.pcap_output.max_file_count,
-        tls_keylog_file=settings.collector.tls_keylog.filepath,
-        geo_resolver=geo_resolver,
-        ipfix_enabled=settings.collector.ipfix.enabled,
-        ipfix_host=settings.collector.ipfix.host,
-        ipfix_port=settings.collector.ipfix.port,
-        ipfix_export_interval=settings.collector.ipfix.export_interval,
-    )
-    set_pipeline(pipeline)
-    await pipeline.start()
+    # 启动采集流水线（多 worker 下仅一个 worker 采集，避免重复抓包与 RRD 锁冲突）
+    lock_fd = _try_acquire_capture_lock()
+    pipeline = None
+    if lock_fd is not None:
+        pipeline = CapturePipeline(
+            storage=storage,
+            interface=settings.collector.interface,
+            pcap_file=settings.collector.pcap_file,
+            dpi_lib_path=settings.collector.dpi_lib_path,
+            flush_interval=settings.collector.flush_interval,
+            idle_timeout=settings.collector.idle_timeout,
+            pcap_output_enabled=settings.collector.pcap_output.enabled,
+            pcap_output_dir=settings.collector.pcap_output.dir,
+            pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
+            pcap_max_file_count=settings.collector.pcap_output.max_file_count,
+            tls_keylog_file=settings.collector.tls_keylog.filepath,
+            geo_resolver=geo_resolver,
+            ipfix_enabled=settings.collector.ipfix.enabled,
+            ipfix_host=settings.collector.ipfix.host,
+            ipfix_port=settings.collector.ipfix.port,
+            ipfix_export_interval=settings.collector.ipfix.export_interval,
+        )
+        set_pipeline(pipeline)
+        await pipeline.start()
 
-    # 若配置未指定网口，尝试从上次保存的状态自动恢复抓包
-    # （解决开发热重载/重启后 /traffic/live 长时间空列表的问题）
-    if not settings.collector.interface and not settings.collector.pcap_file:
-        from app.collector.capture_state import load_capture_state
+        # 若配置未指定网口，尝试从上次保存的状态自动恢复抓包
+        # （解决开发热重载/重启后 /traffic/live 长时间空列表的问题）
+        if not settings.collector.interface and not settings.collector.pcap_file:
+            from app.collector.capture_state import load_capture_state
 
-        saved = load_capture_state()
-        saved_iface = (saved.get("interface") or "").strip()
-        if saved_iface and saved.get("running"):
-            logger.info("检测到上次抓包状态，自动恢复抓包: %s", saved_iface)
-            resume_pipeline = CapturePipeline(
-                storage=storage,
-                interface=saved_iface,
-                pcap_file="",
-                dpi_lib_path=settings.collector.dpi_lib_path,
-                flush_interval=settings.collector.flush_interval,
-                pcap_output_enabled=settings.collector.pcap_output.enabled,
-                pcap_output_dir=settings.collector.pcap_output.dir,
-                pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
-                pcap_max_file_count=settings.collector.pcap_output.max_file_count,
-                tls_keylog_file=settings.collector.tls_keylog.filepath,
-                geo_resolver=geo_resolver,
-                ipfix_enabled=settings.collector.ipfix.enabled,
-                ipfix_host=settings.collector.ipfix.host,
-                ipfix_port=settings.collector.ipfix.port,
-                ipfix_export_interval=settings.collector.ipfix.export_interval,
-            )
-            set_pipeline(resume_pipeline)
-            await resume_pipeline.start()
+            saved = load_capture_state()
+            saved_iface = (saved.get("interface") or "").strip()
+            if saved_iface and saved.get("running"):
+                logger.info("检测到上次抓包状态，自动恢复抓包: %s", saved_iface)
+                resume_pipeline = CapturePipeline(
+                    storage=storage,
+                    interface=saved_iface,
+                    pcap_file="",
+                    dpi_lib_path=settings.collector.dpi_lib_path,
+                    flush_interval=settings.collector.flush_interval,
+                    idle_timeout=settings.collector.idle_timeout,
+                    pcap_output_enabled=settings.collector.pcap_output.enabled,
+                    pcap_output_dir=settings.collector.pcap_output.dir,
+                    pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
+                    pcap_max_file_count=settings.collector.pcap_output.max_file_count,
+                    tls_keylog_file=settings.collector.tls_keylog.filepath,
+                    geo_resolver=geo_resolver,
+                    ipfix_enabled=settings.collector.ipfix.enabled,
+                    ipfix_host=settings.collector.ipfix.host,
+                    ipfix_port=settings.collector.ipfix.port,
+                    ipfix_export_interval=settings.collector.ipfix.export_interval,
+                )
+                set_pipeline(resume_pipeline)
+                await resume_pipeline.start()
+    else:
+        logger.info("采集已由其他 worker 持有，本 worker 仅提供 API 服务")
 
     yield
 
-    # 关闭时：停止采集流水线 → 清理存储 → 关闭 GeoIP
+    # 关闭时：停止采集流水线 → 释放采集锁 → 清理存储 → 关闭 GeoIP
     stop_auto_update()
     current = get_pipeline() or pipeline
-    await current.stop()
+    if current is not None:
+        await current.stop()
     set_pipeline(None)  # type: ignore[arg-type]
+    if lock_fd is not None and lock_fd >= 0:
+        try:
+            os.close(lock_fd)  # 释放采集锁（进程退出时也会自动释放）
+        except OSError:
+            pass
     await close_storage()
     close_geo_resolver()
 

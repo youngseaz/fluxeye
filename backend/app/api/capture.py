@@ -154,6 +154,7 @@ async def start_capture(req: CaptureStartRequest):
         pcap_file=req.pcap_file or settings.collector.pcap_file,
         dpi_lib_path=settings.collector.dpi_lib_path,
         flush_interval=settings.collector.flush_interval,
+        idle_timeout=settings.collector.idle_timeout,
         pcap_output_enabled=settings.collector.pcap_output.enabled,
         pcap_output_dir=settings.collector.pcap_output.dir,
         pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
@@ -229,6 +230,7 @@ async def start_pcap_recording(req: PcapRecordingStartRequest = PcapRecordingSta
             interface=switch_interface,
             dpi_lib_path=settings.collector.dpi_lib_path,
             flush_interval=settings.collector.flush_interval,
+            idle_timeout=settings.collector.idle_timeout,
             tls_keylog_file=settings.collector.tls_keylog.filepath,
             geo_resolver=geo_resolver,
         )

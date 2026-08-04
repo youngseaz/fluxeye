@@ -217,6 +217,7 @@ async def _restart_pipeline_for_config():
         interface=interface,
         dpi_lib_path=settings.collector.dpi_lib_path,
         flush_interval=settings.collector.flush_interval,
+        idle_timeout=settings.collector.idle_timeout,
         pcap_output_enabled=settings.collector.pcap_output.enabled,
         pcap_output_dir=settings.collector.pcap_output.dir,
         pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,

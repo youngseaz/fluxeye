@@ -77,16 +77,39 @@ void ndpi_helper_free_flow(int64_t flow_ptr) {
 
 /**
  * 从 L2 帧中提取 L3 (IP) 载荷。
- * 支持 Ethernet II (0x0800 IPv4, 0x86DD IPv6)。
+ * 支持 Ethernet II (0x0800 IPv4, 0x86DD IPv6)、802.1Q (0x8100) /
+ * 802.1ad QinQ (0x88a8) VLAN 标签、以及 PPPoE Session (0x8864) 封装。
+ * 运营商镜像(SPAN)流量常为 PPPoE，需跳过 PPPoE 头(6B) + PPP 协议(2B)。
  */
 static int extract_l3(const uint8_t *l2_data, uint16_t l2_len,
                       const uint8_t **l3_data, uint16_t *l3_len) {
   if (!l2_data || l2_len < 14) return -1;
   uint16_t ethertype = (l2_data[12] << 8) | l2_data[13];
-  if (ethertype != 0x0800 && ethertype != 0x86DD) return -1; /* 只支持 IPv4/IPv6 */
-  *l3_data = l2_data + 14;
-  *l3_len = l2_len - 14;
-  return 0;
+
+  /* 逐层跳过 VLAN 标签（每层 4 字节），直到真实 EtherType */
+  while ((ethertype == 0x8100 || ethertype == 0x88a8) && l2_len >= 18) {
+    l2_data += 4;
+    l2_len -= 4;
+    ethertype = (l2_data[12] << 8) | l2_data[13];
+  }
+
+  if (ethertype == 0x0800 || ethertype == 0x86DD) {
+    *l3_data = l2_data + 14;
+    *l3_len = l2_len - 14;
+    return 0;
+  }
+
+  /* PPPoE Session: ethertype 0x8864，跳过 PPPoE 头(6B) + PPP 协议(2B) 到 IP */
+  if (ethertype == 0x8864 && l2_len >= 22) {
+    uint16_t ppp = (l2_data[20] << 8) | l2_data[21];
+    if (ppp == 0x0021 || ppp == 0x0057) {  /* IPv4 / IPv6 */
+      *l3_data = l2_data + 22;
+      *l3_len = l2_len - 22;
+      return 0;
+    }
+  }
+
+  return -1;
 }
 
 /**

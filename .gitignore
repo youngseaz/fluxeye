@@ -8,6 +8,9 @@ __pycache__/
 venv/
 dist/
 build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # C build artifacts
 *.o
@@ -36,7 +39,14 @@ backend/data/captures/
 backend/data/geoip/
 backend/data/rrd/
 backend/data/oui_vendors.json
+backend/data/capture_state.json
+backend/data/tls_keys.log
+backend/data/capture.lock
 backend/logs/
+# 通用运行时/抓包产物兜底
+*.log
+*.pcap
+*.rrd
 
 # Config（个人数据，不上传）
 backend/config/config.dev.yaml

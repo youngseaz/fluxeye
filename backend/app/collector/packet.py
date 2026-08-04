@@ -88,13 +88,24 @@ def mac_bytes_to_str(mac: bytes) -> str:
 
 
 def parse_ethernet(data: bytes) -> tuple[int, bytes, str, str]:
-    """解析 Ethernet II 帧头，返回 (ethertype, payload, src_mac, dst_mac)。"""
+    """解析 Ethernet II 帧头，返回 (ethertype, payload, src_mac, dst_mac)。
+
+    支持 802.1Q (0x8100) / 802.1ad QinQ (0x88a8) VLAN 标签：
+    镜像(SPAN)流量常带 VLAN 头，若不解标签，IPv4/IPv6 包会被误判为
+    "非 IP 包" 而整包丢弃，导致 tcpdump 能抓到但系统解析不到。
+    """
     if len(data) < 14:
         return 0, b"", "", ""
     dst_mac = mac_bytes_to_str(data[0:6])
     src_mac = mac_bytes_to_str(data[6:12])
-    ethertype = struct.unpack("!H", data[12:14])[0]
-    return ethertype, data[14:], src_mac, dst_mac
+    # ethertype 字段位置（初始在 MAC 头后偏移 12）
+    et_offset = 12
+    ethertype = struct.unpack("!H", data[et_offset:et_offset + 2])[0]
+    # 跳过 VLAN：VLAN 帧为 [ethertype][TCI 2B][内层 ethertype 2B]，共 4 字节
+    while ethertype in (0x8100, 0x88a8) and len(data) >= et_offset + 6:
+        et_offset += 4
+        ethertype = struct.unpack("!H", data[et_offset:et_offset + 2])[0]
+    return ethertype, data[et_offset + 2:], src_mac, dst_mac
 
 
 def parse_ipv4(data: bytes) -> Optional[dict]:
@@ -197,6 +208,25 @@ def parse_udp(data: bytes) -> Optional[dict]:
 L4_PROTO_MAP = {1: "icmp", 6: "tcp", 17: "udp", 132: "sctp"}
 
 
+def _extract_pppoe(pppoe: bytes) -> tuple[int, bytes]:
+    """解析 PPPoE Session 帧，返回 (内层 EtherType, IP 载荷)。
+
+    PPPoE 帧结构: [ver/type 1][code 1][session_id 2][length 2] [PPP协议 2] [IP...]
+    PPP 协议: 0x0021=IPv4, 0x0057=IPv6；code=0x00 为 Session 数据帧。
+    运营商镜像(SPAN)流量常为 PPPoE 封装(ethertype 0x8864)，需剥离后才能解析 IP。
+    """
+    if len(pppoe) < 8:
+        return 0, b""
+    if pppoe[1] != 0x00:  # 仅 Session 数据帧承载 IP；Discovery 控制帧无 IP
+        return 0, b""
+    ppp_proto = struct.unpack("!H", pppoe[6:8])[0]
+    if ppp_proto == 0x0021:
+        return 0x0800, pppoe[8:]
+    if ppp_proto == 0x0057:
+        return 0x86DD, pppoe[8:]
+    return 0, b""
+
+
 def parse_packet(raw_packet: bytes, ts: Optional[float] = None) -> Optional[ParsedPacket]:
     """从原始二层数据包解析出 ParsedPacket。
 
@@ -213,6 +243,15 @@ def parse_packet(raw_packet: bytes, ts: Optional[float] = None) -> Optional[Pars
 
     # 解析 Ethernet 帧
     ethertype, eth_payload, src_mac, dst_mac = parse_ethernet(raw_packet)
+
+    # PPPoE 封装：镜像口常携带运营商 PPPoE 帧 (ethertype 0x8864)，剥离后取内层 IP
+    if ethertype == 0x8864:
+        inner_et, ip_payload = _extract_pppoe(eth_payload)
+        if not ip_payload:
+            logger.debug("跳过 PPPoE 非 IP 帧")
+            return None
+        ethertype = inner_et
+        eth_payload = ip_payload
 
     # 解析 IPv4 或 IPv6
     if ethertype == 0x0800:

@@ -48,6 +48,12 @@ class FlowManager:
             first = self._first_seen.get(key, existing.timestamp)
             delta_ms = int((now - first).total_seconds() * 1000)
             existing.duration_ms = max(0, delta_ms)  # 确保非负
+            # 更新 DPI 检测结果：nDPI 是多包检测器，协议可能在后继包才识别，
+            # 若只在首包写入 l7_proto，大多数 TCP 流会永远停留在 "unknown"
+            if flow.l7_proto and flow.l7_proto.lower() != "unknown":
+                existing.l7_proto = flow.l7_proto
+            if flow.l7_category:
+                existing.l7_category = flow.l7_category
             if flow.l7_meta:
                 existing.l7_meta = flow.l7_meta
             if flow.dst_host:

@@ -81,8 +81,41 @@ class DPIEngine:
         # 流风险缓存: flow_key -> list[dict]
         self._risks: dict[str, list[dict]] = {}
 
+    def _preload_ndpi_lib(self) -> None:
+        """预加载 libndpi 依赖库，确保桥接库能解析其符号。
+
+        桥接库 libndpi_helper.so 链接了 libndpi.so.5，而 nDPI 编译产物位于
+        third/nDPI/src/lib/ 下、不在系统库搜索路径中。若不先加载该依赖，
+        ctypes 加载桥接库会因找不到 libndpi.so.5 而失败 (OSError)，
+        导致 DPI 静默降级为"端口回退"模式、完全无法做深度包检测。
+        """
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.normpath(
+            os.path.join(_script_dir, "..", "..", "..")
+        )
+        candidates = [
+            os.path.join(repo_root, "third", "nDPI", "src", "lib", "libndpi.so"),
+            os.path.join(repo_root, "third", "nDPI", "src", "lib", "libndpi.so.5"),
+            "/usr/local/lib/libndpi.so.5",
+            "/usr/local/lib/libndpi.so",
+            "/usr/lib/libndpi.so.5",
+            "/usr/lib/x86_64-linux-gnu/libndpi.so.5",
+        ]
+        for cand in candidates:
+            if os.path.exists(cand):
+                try:
+                    ctypes.CDLL(cand)
+                    logger.info("已预加载 nDPI 依赖库: %s", cand)
+                    return
+                except OSError:
+                    continue
+        logger.warning("未找到 libndpi 依赖库，DPI 可能无法加载")
+
     def load(self) -> bool:
         """加载 nDPI 桥接库并初始化引擎。"""
+        # 先加载 libndpi 依赖，再加载桥接库
+        self._preload_ndpi_lib()
+
         _script_dir = os.path.dirname(os.path.abspath(__file__))
         search_paths = [
             os.path.join(_script_dir, "..", "..", "lib", "libndpi_helper.so"),

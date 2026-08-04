@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import sqlite3
@@ -43,13 +44,14 @@ class SQLiteStore(StorageBackend):
         self.config = config
         self.db_path = Path(config.path)
         self._conn: aiosqlite.Connection | None = None
+        self._read_conn: aiosqlite.Connection | None = None
 
     # ── 生命周期 ────────────────────────────────────────
 
     async def initialize(self) -> None:
         """初始化数据库连接，创建表结构。"""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(str(self.db_path))
+        self._conn = await aiosqlite.connect(str(self.db_path), timeout=15)
         self._conn.row_factory = aiosqlite.Row
 
         if self.config.wal:
@@ -59,13 +61,69 @@ class SQLiteStore(StorageBackend):
         )
         await self._conn.execute("PRAGMA synchronous=NORMAL;")
         await self._conn.execute("PRAGMA cache_size=-8000;")  # 8 MB cache
+        # 写锁等待上限 15s：避免并发写时立即抛 "database is locked" 丢失数据
+        await self._conn.execute("PRAGMA busy_timeout=15000;")
 
         await self._create_tables()
 
+        # 独立的只读查询连接：WAL 模式下读与写可并发，避免查询阻塞在写事务后
+        self._read_conn = await aiosqlite.connect(str(self.db_path), timeout=15)
+        self._read_conn.row_factory = aiosqlite.Row
+        if self.config.wal:
+            await self._read_conn.execute("PRAGMA journal_mode=WAL;")
+        await self._read_conn.execute("PRAGMA busy_timeout=15000;")
+        await self._read_conn.execute("PRAGMA query_only=ON;")
+        await self._read_conn.execute("PRAGMA synchronous=NORMAL;")
+
     async def close(self) -> None:
+        if self._read_conn:
+            await self._read_conn.close()
+            self._read_conn = None
         if self._conn:
             await self._conn.close()
             self._conn = None
+
+    def _rconn(self) -> aiosqlite.Connection:
+        """返回只读查询连接；未初始化时回退到主连接。"""
+        return self._read_conn or self._conn
+
+    async def _write(self, work) -> int:
+        """在显式事务中执行写操作。
+
+        失败自动回滚；遇 SQLite 锁冲突 ("database is locked") 时指数退避重试，
+        避免批量写入因瞬时锁竞争直接失败而丢失流量数据。
+        """
+        delays = [0.2, 0.5, 1.0, 2.0, 3.0]
+        for attempt in range(len(delays) + 1):
+            try:
+                await self._conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < len(delays):
+                    await asyncio.sleep(delays[attempt])
+                    continue
+                raise
+            try:
+                result = await work()
+                await self._conn.commit()
+                return result
+            except BaseException as e:
+                try:
+                    await self._conn.rollback()
+                except Exception:
+                    pass
+                if (
+                    isinstance(e, sqlite3.OperationalError)
+                    and "locked" in str(e).lower()
+                    and attempt < len(delays)
+                ):
+                    logger.warning(
+                        "SQLite 写锁冲突 (%s)，%.1fs 后重试 (第 %d 次)",
+                        e, delays[attempt], attempt + 1,
+                    )
+                    await asyncio.sleep(delays[attempt])
+                    continue
+                raise
+        raise RuntimeError("SQLite 写操作重试次数耗尽")
 
     async def _create_tables(self) -> None:
         """创建 SQLite 表结构和索引（含自动迁移）。"""
@@ -160,48 +218,51 @@ class SQLiteStore(StorageBackend):
                      flow.l7_proto, flow.bytes_sent + flow.bytes_recv)
         ts = int(flow.timestamp.timestamp())
         risks_json = json.dumps(flow.risks, ensure_ascii=False)
-        cursor = await self._conn.execute(
-            """INSERT INTO flows
-               (timestamp_s, src_mac, dst_mac, src_ip, dst_ip, src_port, dst_port,
-                l4_proto, l7_proto, bytes_sent, bytes_recv,
-                packets_sent, packets_recv, l7_meta, duration_ms, l7_category,
-                dst_country, dst_region, dst_city, dst_asn, dst_as_org, dst_lat, dst_lon,
-                dst_host, interface, risks, risk_score, pcap_file)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                ts,
-                flow.src_mac,
-                flow.dst_mac,
-                flow.src_ip,
-                flow.dst_ip,
-                flow.src_port,
-                flow.dst_port,
-                flow.l4_proto,
-                flow.l7_proto,
-                flow.bytes_sent,
-                flow.bytes_recv,
-                flow.packets_sent,
-                flow.packets_recv,
-                flow.l7_meta,
-                flow.duration_ms,
-                flow.l7_category,
-                flow.dst_country,
-                flow.dst_region,
-                flow.dst_city,
-                flow.dst_asn,
-                flow.dst_as_org,
-                flow.dst_lat,
-                flow.dst_lon,
-                flow.dst_host,
-                flow.interface,
-                risks_json,
-                flow.risk_score,
-                flow.pcap_file,
-            ),
-        )
-        await self._conn.commit()
-        return cursor.lastrowid or 0
+
+        async def _do() -> int:
+            cursor = await self._conn.execute(
+                """INSERT INTO flows
+                   (timestamp_s, src_mac, dst_mac, src_ip, dst_ip, src_port, dst_port,
+                    l4_proto, l7_proto, bytes_sent, bytes_recv,
+                    packets_sent, packets_recv, l7_meta, duration_ms, l7_category,
+                    dst_country, dst_region, dst_city, dst_asn, dst_as_org, dst_lat, dst_lon,
+                    dst_host, interface, risks, risk_score, pcap_file)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    ts,
+                    flow.src_mac,
+                    flow.dst_mac,
+                    flow.src_ip,
+                    flow.dst_ip,
+                    flow.src_port,
+                    flow.dst_port,
+                    flow.l4_proto,
+                    flow.l7_proto,
+                    flow.bytes_sent,
+                    flow.bytes_recv,
+                    flow.packets_sent,
+                    flow.packets_recv,
+                    flow.l7_meta,
+                    flow.duration_ms,
+                    flow.l7_category,
+                    flow.dst_country,
+                    flow.dst_region,
+                    flow.dst_city,
+                    flow.dst_asn,
+                    flow.dst_as_org,
+                    flow.dst_lat,
+                    flow.dst_lon,
+                    flow.dst_host,
+                    flow.interface,
+                    risks_json,
+                    flow.risk_score,
+                    flow.pcap_file,
+                ),
+            )
+            return cursor.lastrowid or 0
+
+        return await self._write(_do)
 
     async def write_flows_batch(self, flows: list[FlowRecord]) -> int:
         assert self._conn is not None
@@ -241,19 +302,22 @@ class SQLiteStore(StorageBackend):
             )
             for f in flows
         ]
-        await self._conn.executemany(
-            """INSERT INTO flows
-               (timestamp_s, src_mac, dst_mac, src_ip, dst_ip, src_port, dst_port,
-                l4_proto, l7_proto, bytes_sent, bytes_recv,
-                packets_sent, packets_recv, l7_meta, duration_ms, l7_category,
-                dst_country, dst_region, dst_city, dst_asn, dst_as_org, dst_lat, dst_lon,
-                dst_host, interface, risks, risk_score, pcap_file)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows,
-        )
-        await self._conn.commit()
-        return len(rows)
+
+        async def _do() -> int:
+            await self._conn.executemany(
+                """INSERT INTO flows
+                   (timestamp_s, src_mac, dst_mac, src_ip, dst_ip, src_port, dst_port,
+                    l4_proto, l7_proto, bytes_sent, bytes_recv,
+                    packets_sent, packets_recv, l7_meta, duration_ms, l7_category,
+                    dst_country, dst_region, dst_city, dst_asn, dst_as_org, dst_lat, dst_lon,
+                    dst_host, interface, risks, risk_score, pcap_file)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+            return len(rows)
+
+        return await self._write(_do)
 
     async def _get_time_range_seconds(self, time_range: str) -> int:
         """将时间范围字符串转为秒数。"""
@@ -271,7 +335,7 @@ class SQLiteStore(StorageBackend):
         since = now - span
         logger.debug("查询概览: time_range=%s span=%ds", time_range, span)
 
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT
                    COALESCE(SUM(bytes_sent + bytes_recv), 0) AS total_bytes,
                    COALESCE(SUM(packets_sent + packets_recv), 0) AS total_packets,
@@ -300,7 +364,7 @@ class SQLiteStore(StorageBackend):
         now = int(datetime.now().timestamp())
         since = now - span
 
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT l7_proto,
                       SUM(bytes_sent + bytes_recv) AS bytes_total,
                       COUNT(*) AS flow_count
@@ -333,7 +397,7 @@ class SQLiteStore(StorageBackend):
         since = now - span
 
         # 出方向: 本机(src_ip)主动发起的流量
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT src_ip AS ip,
                       SUM(bytes_sent) AS bytes_total
                FROM flows
@@ -349,7 +413,7 @@ class SQLiteStore(StorageBackend):
         ]
 
         # 入方向: 远端(dst_ip)发回的流量
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT dst_ip AS ip,
                       SUM(bytes_recv) AS bytes_total
                FROM flows
@@ -378,7 +442,7 @@ class SQLiteStore(StorageBackend):
         now = int(datetime.now().timestamp())
         since = now - span
 
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT
                    (timestamp_s / ?) * ? AS bucket,
                    SUM(bytes_sent + bytes_recv) AS bytes_total,
@@ -433,7 +497,7 @@ class SQLiteStore(StorageBackend):
         where = " AND ".join(conditions)
 
         # 总数
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             f"SELECT COUNT(*) AS cnt FROM flows WHERE {where}", params
         )
         row = await cursor.fetchone()
@@ -441,7 +505,7 @@ class SQLiteStore(StorageBackend):
 
         # 分页
         offset = (page - 1) * size
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             f"""SELECT * FROM flows
                 WHERE {where}
                 ORDER BY timestamp_s DESC
@@ -491,7 +555,7 @@ class SQLiteStore(StorageBackend):
 
     async def query_flow_by_id(self, flow_id: int) -> FlowRecord | None:
         assert self._conn is not None
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             "SELECT * FROM flows WHERE id = ?", (flow_id,)
         )
         row = await cursor.fetchone()
@@ -536,58 +600,83 @@ class SQLiteStore(StorageBackend):
     async def cleanup_old_flows(self, retention_days: int = 7) -> int:
         """清理超过 retention_days 的旧流记录。
 
-        聚合到 proto_stats / top_talkers 后删除原始明细。
-        每小时和每天的聚合数据保留更久，由外部调度负责。
+        聚合到 proto_stats / top_talkers 后分块删除原始明细。
+        各阶段使用独立短事务，避免长事务长时间持有写锁阻塞读写。
         """
         assert self._conn is not None
         import time
         cutoff = int(time.time()) - retention_days * 86_400
 
-        # 先聚合到小时级统计（保留原始协议分布信息）
-        await self._conn.execute("""
-            INSERT OR IGNORE INTO proto_stats (time_bucket, l7_proto, bytes_total, flow_count)
-            SELECT
-                (timestamp_s / 3600) * 3600 AS bucket,
-                l7_proto,
-                SUM(bytes_sent + bytes_recv),
-                COUNT(*)
-            FROM flows
-            WHERE timestamp_s < ?
-            GROUP BY bucket, l7_proto
-        """, (cutoff,))
+        # 先聚合到小时级统计（保留原始协议分布信息），每步独立事务
+        async def _agg_proto() -> int:
+            await self._conn.execute("""
+                INSERT OR IGNORE INTO proto_stats (time_bucket, l7_proto, bytes_total, flow_count)
+                SELECT
+                    (timestamp_s / 3600) * 3600 AS bucket,
+                    l7_proto,
+                    SUM(bytes_sent + bytes_recv),
+                    COUNT(*)
+                FROM flows
+                WHERE timestamp_s < ?
+                GROUP BY bucket, l7_proto
+            """, (cutoff,))
+            return 0
 
-        # 聚合到 top_talkers
-        await self._conn.execute("""
-            INSERT OR IGNORE INTO top_talkers (time_bucket, ip, bytes_total, direction)
-            SELECT
-                (timestamp_s / 3600) * 3600 AS bucket,
-                src_ip, SUM(bytes_sent), 'egress'
-            FROM flows WHERE timestamp_s < ?
-            GROUP BY bucket, src_ip
-        """, (cutoff,))
-        await self._conn.execute("""
-            INSERT OR IGNORE INTO top_talkers (time_bucket, ip, bytes_total, direction)
-            SELECT
-                (timestamp_s / 3600) * 3600 AS bucket,
-                dst_ip, SUM(bytes_recv), 'ingress'
-            FROM flows WHERE timestamp_s < ?
-            GROUP BY bucket, dst_ip
-        """, (cutoff,))
+        await self._write(_agg_proto)
 
-        # 删除旧明细
-        cursor = await self._conn.execute(
-            "DELETE FROM flows WHERE timestamp_s < ?", (cutoff,)
-        )
-        deleted = cursor.rowcount
-        await self._conn.commit()
+        async def _agg_egress() -> int:
+            await self._conn.execute("""
+                INSERT OR IGNORE INTO top_talkers (time_bucket, ip, bytes_total, direction)
+                SELECT
+                    (timestamp_s / 3600) * 3600 AS bucket,
+                    src_ip, SUM(bytes_sent), 'egress'
+                FROM flows WHERE timestamp_s < ?
+                GROUP BY bucket, src_ip
+            """, (cutoff,))
+            return 0
 
-        if deleted > 0:
+        await self._write(_agg_egress)
+
+        async def _agg_ingress() -> int:
+            await self._conn.execute("""
+                INSERT OR IGNORE INTO top_talkers (time_bucket, ip, bytes_total, direction)
+                SELECT
+                    (timestamp_s / 3600) * 3600 AS bucket,
+                    dst_ip, SUM(bytes_recv), 'ingress'
+                FROM flows WHERE timestamp_s < ?
+                GROUP BY bucket, dst_ip
+            """, (cutoff,))
+            return 0
+
+        await self._write(_agg_ingress)
+
+        # 分块删除旧明细，每块独立短事务
+        total_deleted = 0
+        batch_size = 5000
+        while True:
+            async def _del_batch() -> int:
+                cursor = await self._conn.execute(
+                    "DELETE FROM flows WHERE id IN "
+                    "(SELECT id FROM flows WHERE timestamp_s < ? LIMIT ?)",
+                    (cutoff, batch_size),
+                )
+                return cursor.rowcount
+
+            deleted = await self._write(_del_batch)
+            total_deleted += deleted
+            if deleted < batch_size:
+                break
+
+        if total_deleted > 0:
             logger.info("数据保留: 已清理 %d 条超过 %d 天的旧流记录",
-                        deleted, retention_days)
-            # 清理后重新整理数据库
-            await self._conn.execute("PRAGMA optimize;")
+                        total_deleted, retention_days)
+            # 清理后整理数据库（优化查询计划）
+            try:
+                await self._conn.execute("PRAGMA optimize;")
+            except Exception:
+                pass
 
-        return deleted
+        return total_deleted
 
     # ── 安全态势 ────────────────────────────────────────
 
@@ -603,7 +692,7 @@ class SQLiteStore(StorageBackend):
         since_ts = int(since.timestamp())
 
         # 如果有风险列存在，查询有风险的流
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT * FROM flows
                WHERE timestamp_s >= ?
                  AND risk_score > ?
@@ -668,7 +757,7 @@ class SQLiteStore(StorageBackend):
         assert self._conn is not None
         since_ts = int(since.timestamp())
 
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT
                    COUNT(*) AS total,
                    COALESCE(SUM(risk_score), 0) AS total_score,
@@ -688,7 +777,7 @@ class SQLiteStore(StorageBackend):
         low = row["low_count"] if row else 0
 
         # 按风险类型统计
-        cursor2 = await self._conn.execute(
+        cursor2 = await self._rconn().execute(
             """SELECT l7_proto, COUNT(*) AS cnt
                FROM flows
                WHERE timestamp_s >= ? AND risk_score > 0
@@ -729,7 +818,7 @@ class SQLiteStore(StorageBackend):
         """查询 Top N 访问域名（按流量排序）。"""
         assert self._conn is not None
         since_ts = int(since.timestamp())
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT dst_host AS host,
                       SUM(bytes_sent + bytes_recv) AS bytes_total,
                       COUNT(*) AS flow_count
@@ -762,7 +851,7 @@ class SQLiteStore(StorageBackend):
         """查询应用层协议统计（按流量排序）。"""
         assert self._conn is not None
         since_ts = int(since.timestamp())
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT l7_proto AS protocol,
                       SUM(bytes_sent + bytes_recv) AS bytes_total,
                       COUNT(*) AS flow_count
@@ -796,7 +885,7 @@ class SQLiteStore(StorageBackend):
         assert self._conn is not None
         since_ts = int(since.timestamp())
 
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT
                    COALESCE(SUM(bytes_sent + bytes_recv), 0) AS total_bytes,
                    COALESCE(SUM(packets_sent + packets_recv), 0) AS total_packets,
@@ -810,7 +899,7 @@ class SQLiteStore(StorageBackend):
         total_flows = row["total_flows"] if row else 0
 
         # 按协议汇总
-        cursor2 = await self._conn.execute(
+        cursor2 = await self._rconn().execute(
             """SELECT l7_proto AS protocol, SUM(bytes_sent + bytes_recv) AS bytes
                FROM flows WHERE timestamp_s >= ?
                GROUP BY l7_proto ORDER BY bytes DESC""",
@@ -820,7 +909,7 @@ class SQLiteStore(StorageBackend):
         by_protocol = [{"protocol": r["protocol"], "bytes": r["bytes"]} for r in rows2]
 
         # 按分类汇总
-        cursor3 = await self._conn.execute(
+        cursor3 = await self._rconn().execute(
             """SELECT l7_category AS category, SUM(bytes_sent + bytes_recv) AS bytes
                FROM flows WHERE timestamp_s >= ? AND l7_category != ''
                GROUP BY l7_category ORDER BY bytes DESC""",
@@ -1580,7 +1669,7 @@ class SQLiteStore(StorageBackend):
         assert self._conn is not None
         since_ts = int(since.timestamp())
 
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             """SELECT l7_proto, dst_host, l7_category,
                       SUM(bytes_sent + bytes_recv) AS bytes_total,
                       COUNT(*) AS flow_count
@@ -1645,7 +1734,7 @@ class SQLiteStore(StorageBackend):
         order = order_map.get(sort_by, "total_bytes DESC")
         # 安全说明: order 来自上方硬编码白名单映射，不可被用户篡改，因此 f-string 是安全的
         # 按 MAC 地址聚合（若有），否则按 src_ip 聚合
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             f"""SELECT
                        CASE WHEN src_mac != '' THEN src_mac ELSE src_ip END AS device_id,
                        MAX(src_mac) AS src_mac,
@@ -1678,7 +1767,7 @@ class SQLiteStore(StorageBackend):
 
             # 查询该设备访问的应用服务
             if mac:
-                svc_cursor = await self._conn.execute(
+                svc_cursor = await self._rconn().execute(
                     """SELECT l7_proto, dst_host,
                                SUM(bytes_sent + bytes_recv) AS bytes,
                                COUNT(*) AS cnt
@@ -1689,7 +1778,7 @@ class SQLiteStore(StorageBackend):
                     (since_ts, mac),
                 )
             else:
-                svc_cursor = await self._conn.execute(
+                svc_cursor = await self._rconn().execute(
                     """SELECT l7_proto, dst_host,
                                SUM(bytes_sent + bytes_recv) AS bytes,
                                COUNT(*) AS cnt
@@ -1757,7 +1846,7 @@ class SQLiteStore(StorageBackend):
             where_clause = "src_ip = ? OR dst_ip = ?"
 
         # 基础统计
-        cursor = await self._conn.execute(
+        cursor = await self._rconn().execute(
             f"""SELECT
                        MAX(src_mac) AS src_mac,
                        COALESCE(SUM(bytes_sent), 0) AS bytes_sent,
@@ -1777,7 +1866,7 @@ class SQLiteStore(StorageBackend):
             return None
 
         # 协议分布
-        cursor2 = await self._conn.execute(
+        cursor2 = await self._rconn().execute(
             f"""SELECT l7_proto, SUM(bytes_sent + bytes_recv) AS bytes, COUNT(*) AS cnt
                FROM flows WHERE timestamp_s >= ? AND ({where_clause})
                GROUP BY l7_proto ORDER BY bytes DESC LIMIT 10""",
@@ -1787,7 +1876,7 @@ class SQLiteStore(StorageBackend):
                        for r in await cursor2.fetchall()]
 
         # 访问域名
-        cursor3 = await self._conn.execute(
+        cursor3 = await self._rconn().execute(
             f"""SELECT dst_host AS host, SUM(bytes_sent + bytes_recv) AS bytes, COUNT(*) AS cnt
                FROM flows WHERE timestamp_s >= ? AND ({where_clause})
                AND dst_host != '' AND dst_host IS NOT NULL
@@ -1798,7 +1887,7 @@ class SQLiteStore(StorageBackend):
                         for r in await cursor3.fetchall()]
 
         # 通信对端（含国家信息）
-        cursor4 = await self._conn.execute(
+        cursor4 = await self._rconn().execute(
             f"""SELECT
                       CASE WHEN src_ip = ? THEN dst_ip ELSE src_ip END AS peer,
                       SUM(bytes_sent + bytes_recv) AS bytes,
@@ -1814,7 +1903,7 @@ class SQLiteStore(StorageBackend):
                       for r in await cursor4.fetchall()]
 
         # 目标国家
-        cursor5 = await self._conn.execute(
+        cursor5 = await self._rconn().execute(
             f"""SELECT dst_country, SUM(bytes_sent + bytes_recv) AS bytes, COUNT(*) AS cnt
                FROM flows WHERE timestamp_s >= ? AND ({where_clause})
                AND dst_country != '' AND dst_country IS NOT NULL
@@ -1825,7 +1914,7 @@ class SQLiteStore(StorageBackend):
                           for r in await cursor5.fetchall()]
 
         # 应用服务 TOP 10
-        cursor6 = await self._conn.execute(
+        cursor6 = await self._rconn().execute(
             f"""SELECT l7_proto, dst_host, SUM(bytes_sent + bytes_recv) AS bytes, COUNT(*) AS cnt
                FROM flows WHERE timestamp_s >= ? AND ({where_clause})
                GROUP BY l7_proto, dst_host ORDER BY bytes DESC LIMIT 20""",
@@ -1879,7 +1968,7 @@ class SQLiteStore(StorageBackend):
         # 按 MAC 查询时，从数据库获取该设备的真实 IP
         device_ip = ip
         if is_mac_query:
-            ip_cursor = await self._conn.execute(
+            ip_cursor = await self._rconn().execute(
                 "SELECT src_ip, COUNT(*) AS cnt FROM flows WHERE src_mac = ? AND timestamp_s >= ? GROUP BY src_ip ORDER BY cnt DESC LIMIT 1",
                 (ip, since_ts),
             )

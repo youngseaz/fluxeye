@@ -50,6 +50,7 @@ class PacketCapture:
         self._sock: Optional[socket.socket] = None
         self._running = False
         self._packet_count = 0
+        self._parse_skip_count = 0  # 被解析器丢弃的包（非 IP / 未知 EtherType 等）
 
     def _get_iface_index(self) -> int:
         """获取网络接口的索引。"""
@@ -143,14 +144,66 @@ class PacketCapture:
         return await asyncio.get_event_loop().run_in_executor(None, self.recv)
 
     async def stream(self) -> AsyncIterator[ParsedPacket]:
-        """异步迭代器：持续产出 ParsedPacket。"""
+        """异步迭代器：持续产出 ParsedPacket。
+
+        使用独立读取线程持续从 socket 读包放入线程安全队列，事件循环从中
+        消费解析。解耦"抓包速率"与"处理速率"——若处理跟不上，丢弃队列中
+        最旧数据而非让内核 socket 缓冲溢出整批丢失（tcpdump 能抓到而本系统
+        抓不到的主因之一）。
+        """
+        import queue as _queue
+
         self.open()
+        q: _queue.Queue = _queue.Queue(maxsize=20000)
+        loop = asyncio.get_event_loop()
+
+        def _reader() -> None:
+            """专用读取线程：保持 socket 被及时排空。"""
+            while self._running:
+                try:
+                    data = self._sock.recv(self.snap_len)
+                except socket.timeout:
+                    continue
+                except OSError as e:
+                    if self._running:
+                        logger.error("抓包错误: %s", e)
+                    break
+                self._packet_count += 1
+                try:
+                    q.put_nowait(data)
+                except _queue.Full:
+                    # 处理不过来时丢弃最旧数据，保留最新流量
+                    try:
+                        q.get_nowait()
+                        q.put_nowait(data)
+                    except Exception:
+                        pass
+
+        def _get():
+            try:
+                return q.get(timeout=0.5)
+            except _queue.Empty:
+                return None
+
+        loop.run_in_executor(None, _reader)
         try:
             while self._running:
-                pkt = await self.recv_async()
-                if pkt is not None:
-                    yield pkt
+                data = await loop.run_in_executor(None, _get)
+                if data is None:
+                    continue
+                pkt = parse_packet(data)
+                if pkt is None:
+                    self._parse_skip_count += 1
+                    continue
+                pkt.interface = self.interface
+                yield pkt
         finally:
+            self._running = False
+            if self._parse_skip_count:
+                logger.debug(
+                    "抓包统计: 收到 %d 包, 解析器丢弃 %d 包 (非 IP/未知 EtherType/VLAN 未识别)",
+                    self._packet_count, self._parse_skip_count,
+                )
             self.close()
 
     def stop(self) -> None:

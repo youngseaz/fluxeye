@@ -42,6 +42,7 @@ class CapturePipeline:
         pcap_file: str = "",
         dpi_lib_path: str = "libndpi.so",
         flush_interval: float = 5.0,
+        idle_timeout: float = 60.0,
         stats_interval: float = 10.0,
         pcap_output_enabled: bool = False,
         pcap_output_dir: str = "./data/captures",
@@ -75,7 +76,7 @@ class CapturePipeline:
         self.recording_writer: Optional[PcapWriter] = None
         self._pcap_bpf_filter: str = ""
         self.tls_keylog: Optional[TLSKeyLogParser] = None
-        self.flow_manager = FlowManager(idle_timeout=60)
+        self.flow_manager = FlowManager(idle_timeout=idle_timeout)
         self.rrd_store = RRDStore()
         self.ipfix_exporter = IPFIXExporter(
             collector_host=ipfix_host,

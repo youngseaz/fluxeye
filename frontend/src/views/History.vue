@@ -39,7 +39,7 @@
 
     <!-- 结果表格 -->
     <el-card shadow="hover">
-      <el-table :data="tableData" stripe size="small" style="width: 100%" @row-click="goDetail">
+      <el-table :data="tableData" v-loading="loading" stripe size="small" style="width: 100%" @row-click="goDetail">
         <el-table-column prop="timestamp" label="时间" width="170">
           <template #default="{ row }">{{ formatTime(row.timestamp) }}</template>
         </el-table-column>
@@ -116,6 +116,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { fetchConversations } from '@/services/api'
 import type { Conversation } from '@/types'
 
@@ -127,6 +128,9 @@ const currentPage = ref(1)
 const pageSize = ref(15)
 const total = ref(0)
 const tableData = ref<Conversation[]>([])
+const loading = ref(false)
+// 防重入：查询进行中时忽略重复触发，避免请求堆积
+let searchPending = false
 
 function formatTime(ts: string) {
   return new Date(ts).toLocaleString('zh-CN')
@@ -143,6 +147,9 @@ function tagType(p: string) {
 function goDetail(row: any) { router.push(`/flows/${row.id}`) }
 
 async function search() {
+  if (searchPending) return
+  searchPending = true
+  loading.value = true
   const params: any = {
     page: currentPage.value,
     size: pageSize.value,
@@ -153,10 +160,18 @@ async function search() {
   if (timeRange.value?.[0]) params.time_start = timeRange.value[0].toISOString()
   if (timeRange.value?.[1]) params.time_end = timeRange.value[1].toISOString()
 
-  const res = await fetchConversations(params)
-  tableData.value = res.items
-  total.value = res.total
-  currentPage.value = res.page
+  try {
+    const res = await fetchConversations(params)
+    tableData.value = res.items
+    total.value = res.total
+    currentPage.value = res.page
+  } catch (e: any) {
+    // 网络/后端暂不可用时给出提示，保留旧数据
+    ElMessage.error('查询失败: ' + (e?.message || '网络错误，请稍后重试'))
+  } finally {
+    loading.value = false
+    searchPending = false
+  }
 }
 
 function reset() {

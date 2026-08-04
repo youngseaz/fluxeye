@@ -68,6 +68,7 @@ class CollectorConfig(BaseSettings):
     promisc: bool = True
     pcap_file: str = ""  # pcap 回放路径，非空时替代网卡抓包
     flush_interval: float = 5.0  # 流刷出间隔(秒)
+    idle_timeout: float = 60.0  # 流空闲超时(秒)，超时后刷出到存储；越大实时会话越稳定
     dpi_lib_path: str = "libndpi_helper.so"
     pcap_output: PcapOutputConfig = PcapOutputConfig()
     tls_keylog: TLSKeyLogConfig = TLSKeyLogConfig()

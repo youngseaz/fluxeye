@@ -148,9 +148,10 @@ if ! getcap "$PYTHON_BIN" 2>/dev/null | grep -q cap_net_raw; then
 fi
 
 info "FluxEye 生产模式启动中..."
+info "注意: 使用单 worker — 实时活跃流(内存)与抓包必须同进程，多 worker 会导致 /traffic/live 间歇性为空"
 
 exec python -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port 8000 \
-    --workers 2 \
+    --workers 1 \
     --log-level info

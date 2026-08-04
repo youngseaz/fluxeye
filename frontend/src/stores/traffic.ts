@@ -36,7 +36,13 @@ export const useTrafficStore = defineStore('traffic', () => {
 
   // ── 操作 ─────────────────────────────────────────
 
+  // 请求防堆积标记：当上一次请求未完成时跳过本次，避免慢后端导致请求堆积、
+  // 浏览器连接耗尽（ERR_INSUFFICIENT_RESOURCES）和无效重渲染
+  let refreshAllPending = false
+
   async function refreshAll() {
+    if (refreshAllPending) return
+    refreshAllPending = true
     loading.value = true
     error.value = null
     try {
@@ -54,6 +60,7 @@ export const useTrafficStore = defineStore('traffic', () => {
       error.value = e?.message || '数据加载失败'
     } finally {
       loading.value = false
+      refreshAllPending = false
     }
   }
 
@@ -65,20 +72,32 @@ export const useTrafficStore = defineStore('traffic', () => {
     }
   }
 
+  let refreshConversationsPending = false
+
   async function refreshConversations(filters: ConversationFilters = {}) {
+    if (refreshConversationsPending) return
+    refreshConversationsPending = true
     try {
       conversations.value = await fetchConversations(filters)
     } catch {
       // 静默失败
+    } finally {
+      refreshConversationsPending = false
     }
   }
 
+  let refreshLiveSessionsPending = false
+
   async function refreshLiveSessions() {
+    if (refreshLiveSessionsPending) return
+    refreshLiveSessionsPending = true
     try {
       const { data } = await axios.get<Conversation[]>('/api/v1/traffic/live')
       liveSessions.value = data
     } catch {
       // 静默失败
+    } finally {
+      refreshLiveSessionsPending = false
     }
   }
 
