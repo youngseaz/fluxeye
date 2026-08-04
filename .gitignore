@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+
+*.pyo
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# C build artifacts
+*.o
+*.a
+
+# Node
+node_modules/
+dist/
+*.tgz
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+backend/data/*.db
+backend/data/*.db-shm
+backend/data/*.db-wal
+backend/data/captures/
+backend/data/geoip/
+backend/data/rrd/
+backend/data/oui_vendors.json
+backend/logs/
+
+# Config（个人数据，不上传）
+backend/config/config.dev.yaml
+
+# nDPI 源码（git submodule 管理，不重复上传）
+third/nDPI/
+
+# Env
+.env
+.env.local
