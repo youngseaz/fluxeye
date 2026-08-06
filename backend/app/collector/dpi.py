@@ -23,15 +23,16 @@ from app.utils.logger import get_logger
 logger = get_logger("collector.dpi")
 
 # ── nDPI 协议 ID 常量 ─────────────────────────────────
+# 编号对应当前 nDPI v5.0 (src/include/ndpi_protocol_ids.h)，共 468 个协议 (0-467)。
 NDPI_PROTOCOL_UNKNOWN = 0
-NDPI_PROTOCOL_HTTP = 7
 NDPI_PROTOCOL_DNS = 5
+NDPI_PROTOCOL_HTTP = 7
+NDPI_PROTOCOL_DHCP = 18
+NDPI_PROTOCOL_MYSQL = 20
 NDPI_PROTOCOL_TLS = 91
-NDPI_PROTOCOL_QUIC = 169
-NDPI_PROTOCOL_SSH = 15
-NDPI_PROTOCOL_SMTP = 12
-NDPI_PROTOCOL_DHCP = 20
-NDPI_PROTOCOL_RTMP = 133
+NDPI_PROTOCOL_SSH = 92
+NDPI_PROTOCOL_RTMP = 174
+NDPI_PROTOCOL_QUIC = 188
 
 # ── nDPI 风险严重级别 ─────────────────────────────────
 RISK_SEVERITY_NAMES = ["low", "medium", "high", "severe", "critical", "emergency"]
@@ -59,13 +60,26 @@ HIGH_RISK_IDS = {
 }
 
 NDPI_PROTO_NAMES: dict[int, str] = {
-    0: "unknown", 1: "ftp", 2: "pop3", 3: "smtp", 4: "imap",
-    5: "dns", 6: "ipsec", 7: "http", 8: "netbios", 9: "dhcp",
-    11: "rtp", 12: "sip", 13: "snmp", 14: "ssh", 15: "ssh",
-    16: "telnet", 17: "bittorrent", 18: "mysql", 20: "dhcp",
-    26: "ntop", 91: "tls", 92: "dtls", 93: "stun", 94: "ice",
-    119: "quic", 120: "http2", 121: "http3", 133: "rtmp",
-    169: "quic", 176: "wireguard", 181: "doh", 182: "dot",
+    # ══ 重要 ════════════════════════════════════════════════════════════
+    # 这仅是「C 桥接库不可用 / 名字获取失败」时的最后兜底映射。
+    # 权威来源是 nDPI 的 ndpi_get_proto_name() —— 运行时共 468 个协议。
+    # DPIEngine.load() 成功后会用桥接库动态生成完整正确的 self._proto_names，
+    # 此静态表仅在桥接完全不可用时使用。
+    # 编号对应当前 nDPI v5.0 (ndpi_protocol_ids.h)，切勿按旧版本编号。
+    # ═══════════════════════════════════════════════════════════════════
+    0: "unknown", 1: "ftp_control", 2: "pop3", 3: "smtp", 4: "imap",
+    5: "dns", 6: "ipp", 7: "http", 8: "mdns", 9: "ntp",
+    10: "netbios", 11: "nfs", 12: "ssdp", 13: "bgp", 14: "snmp",
+    15: "xdmcp", 16: "smbv1", 17: "syslog", 18: "dhcp", 19: "postgresql",
+    20: "mysql", 26: "ntop", 27: "coap", 30: "dtls", 37: "bittorrent",
+    50: "rtsp", 60: "mongodb", 77: "telnet", 78: "stun", 79: "ipsec",
+    87: "rtp", 88: "rdp", 89: "vnc", 91: "tls", 92: "ssh",
+    93: "usenet", 94: "mgcp", 96: "tftp", 100: "sip", 112: "ldap",
+    114: "mssql-tds", 115: "pptp", 119: "facebook", 120: "twitter",
+    121: "dropbox", 130: "http_connect", 133: "netflix", 146: "radius",
+    159: "openvpn", 163: "tor", 172: "socks", 174: "rtmp",
+    176: "wikipedia", 182: "resp", 188: "quic", 196: "doh_dot",
+    206: "wireguard", 349: "http2",
 }
 
 
@@ -80,6 +94,8 @@ class DPIEngine:
         self._flow_map: dict[str, int] = {}
         # 流风险缓存: flow_key -> list[dict]
         self._risks: dict[str, list[dict]] = {}
+        # 运行时从桥接库动态生成的完整协议名映射（兜底用，覆盖 nDPI 全部协议）
+        self._proto_names: dict[int, str] = {}
 
     def _preload_ndpi_lib(self) -> None:
         """预加载 libndpi 依赖库，确保桥接库能解析其符号。
@@ -144,6 +160,8 @@ class DPIEngine:
             return False
         logger.info("nDPI 引擎就绪 (handle=%d)", self._handle)
         self._available = True
+        # 生成完整且正确的协议名映射（兜底用）
+        self._proto_names = self._build_proto_name_map()
         return True
 
     def _setup_helper(self) -> None:
@@ -226,13 +244,35 @@ class DPIEngine:
                     return name.decode("utf-8", errors="replace")
             except Exception:
                 pass
-            name = NDPI_PROTO_NAMES.get(proto_id)
+            # 优先用运行时动态映射（准确、覆盖全部协议），其次静态表（仅桥接不可用时）
+            name = self._proto_names.get(proto_id) or NDPI_PROTO_NAMES.get(proto_id)
             if name:
                 return name
 
         if not flow_key and flow:
             self._helper.ndpi_helper_free_flow(flow)
         return packet.l7_proto
+
+    def _build_proto_name_map(self) -> dict[int, str]:
+        """从 nDPI 桥接库动态生成完整协议名映射（覆盖全部 468 个协议）。
+
+        静态 NDPI_PROTO_NAMES 的编号可能随 nDPI 版本变化而失效，
+        因此只要桥接可用，就据此生成最新最全的映射，作为协议名获取失败时的兜底。
+        返回值的 key 为协议 ID，value 为 nDPI 返回的原始名字。
+        """
+        names: dict[int, str] = {}
+        try:
+            for pid in range(512):
+                raw = self._helper.ndpi_helper_proto_name(self._handle, pid)
+                if not raw:
+                    continue
+                name = raw.decode("utf-8", errors="replace").strip()
+                if name and name.lower() not in ("", "unknown"):
+                    names[pid] = name
+        except Exception as e:
+            logger.warning("生成协议名映射失败，使用静态 NDPI_PROTO_NAMES: %s", e)
+            return dict(NDPI_PROTO_NAMES)
+        return names
 
     def detect_category(self, flow_key: str) -> str:
         """获取已检测流的协议分类（如 video, streaming, download 等）。"""
@@ -338,7 +378,7 @@ class DPIEngine:
                 name = ""
                 if pid:
                     n = self._helper.ndpi_helper_proto_name(self._handle, pid)
-                    name = n.decode() if n else NDPI_PROTO_NAMES.get(pid, "")
+                    name = n.decode() if n else (self._proto_names.get(pid) or NDPI_PROTO_NAMES.get(pid, ""))
                 # 检测风险
                 risks = self.detect_risks(key)
                 risk_score = self.get_risk_score(key)

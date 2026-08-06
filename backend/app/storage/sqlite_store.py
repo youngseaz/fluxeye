@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -348,11 +348,20 @@ class SQLiteStore(StorageBackend):
         return await self._write(_do)
 
     async def _get_time_range_seconds(self, time_range: str) -> int:
-        """将时间范围字符串转为秒数。"""
-        unit = time_range[-1]
-        value = int(time_range[:-1])
-        multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-        return value * multipliers.get(unit, 60)
+        """将时间范围字符串转为秒数（防注入 + 防 DoS）。
+
+        任何用户输入都会被严格校验为「数字 + 单位」格式，结果必然是整数，
+        因此无法注入 SQL；非法输入返回默认 60s 而不是抛出异常，避免把该
+        端点变成可触发的 500 攻击面。
+        """
+        try:
+            unit = time_range[-1]
+            value = int(time_range[:-1])
+            multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+            return value * multipliers.get(unit, 60)
+        except (ValueError, TypeError, IndexError):
+            logger.warning("非法 time_range=%r，使用默认 60s", time_range)
+            return 60
 
     # ── 查询 ────────────────────────────────────────────
 
@@ -566,8 +575,8 @@ class SQLiteStore(StorageBackend):
                 dst_lat=r["dst_lat"] if "dst_lat" in r.keys() else 0.0,
                 dst_lon=r["dst_lon"] if "dst_lon" in r.keys() else 0.0,
                 dst_host=r["dst_host"] if "dst_host" in r.keys() else "",
-                first_seen=None,
-                last_seen=None,
+                first_seen=datetime.fromtimestamp(r["timestamp_s"]),
+                last_seen=datetime.fromtimestamp(r["timestamp_s"]) + timedelta(milliseconds=(r["duration_ms"] or 0)),
                 interface=r["interface"] if "interface" in r.keys() else "",
             )
             for r in rows
@@ -615,8 +624,8 @@ class SQLiteStore(StorageBackend):
             dst_lat=row["dst_lat"] if "dst_lat" in row.keys() else 0.0,
             dst_lon=row["dst_lon"] if "dst_lon" in row.keys() else 0.0,
             dst_host=row["dst_host"] if "dst_host" in row.keys() else "",
-            first_seen=None,
-            last_seen=None,
+            first_seen=datetime.fromtimestamp(row["timestamp_s"]),
+            last_seen=datetime.fromtimestamp(row["timestamp_s"]) + timedelta(milliseconds=(row["duration_ms"] or 0)),
             interface=row["interface"] if "interface" in row.keys() else "",
             risks=risks_data,
             risk_score=risk_score_val,

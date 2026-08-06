@@ -127,10 +127,8 @@ async def get_overview(
     active_bytes = sum(f.bytes_sent + f.bytes_recv for f in active_flows)
     active_packets = sum(f.packets_sent + f.packets_recv for f in active_flows)
 
-    # 将时间范围转为秒数
-    unit = time_range[-1]
-    value = int(time_range[:-1])
-    span = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(unit, 60)
+    # 将时间范围转为秒数（安全解析，非法输入回退默认 60s）
+    span = _parse_span_seconds(time_range)
 
     return TrafficOverview(
         total_bps=db_overview.total_bps + (active_bytes / span * 8 if span > 0 else 0),
@@ -176,10 +174,8 @@ async def get_time_series(
     """
     from app.pipeline_manager import get_pipeline
 
-    # 将时间范围转为秒数
-    unit = time_range[-1]
-    value = int(time_range[:-1])
-    span = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(unit, 60)
+    # 将时间范围转为秒数（安全解析，非法输入回退默认 60s）
+    span = _parse_span_seconds(time_range)
 
     # 短时间范围使用内存时序数据
     if span <= 3600:
@@ -257,13 +253,26 @@ async def get_services_stats(
     return await storage.query_services_stats(since=since, limit=limit)
 
 
+def _parse_span_seconds(time_range: str, default: int = 60) -> int:
+    """安全地将时间范围字符串转为秒数（防注入 / 防 DoS）。
+
+    仅接受「数字 + 单位」格式；任何输入都会被严格校验，非法输入返回默认值
+    而非抛异常，避免 time_range 成为可触发的 500 攻击面。
+    """
+    try:
+        unit = time_range[-1]
+        value = int(time_range[:-1])
+        multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        return value * multipliers.get(unit, default)
+    except (ValueError, TypeError, IndexError):
+        logger.warning("非法 time_range=%r，使用默认 %ds", time_range, default)
+        return default
+
+
 def _parse_time_range(time_range: str):
-    """将时间范围字符串转为 timedelta。"""
-    unit = time_range[-1]
-    value = int(time_range[:-1])
+    """将时间范围字符串转为 timedelta（安全解析）。"""
     from datetime import timedelta
-    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    return timedelta(seconds=value * multipliers.get(unit, 60))
+    return timedelta(seconds=_parse_span_seconds(time_range))
 
 
 # ── DNS 统计 ─────────────────────────────────────────

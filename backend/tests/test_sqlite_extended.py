@@ -329,3 +329,144 @@ class TestFlowRecordWithRisks:
         # 新记录应保留
         overview = await sqlite_store.query_overview(time_range="1h")
         assert overview.active_flows >= 1
+
+
+async def store_with_dns_data():
+    """预填充 DNS 查询/响应流的存储后端。"""
+    fd, path = tempfile.mkstemp(suffix='.db')
+    os.close(fd)
+    store = SQLiteStore(SQLiteConfig(path=path))
+    await store.initialize()
+    now = datetime.now(timezone.utc)
+
+    flows = []
+    for i in range(10):
+        domain = f"www.site{i % 3}.com"
+        client = f"10.0.0.{i % 4 + 1}"
+        flows.append(FlowRecord(
+            timestamp=now - timedelta(minutes=i * 2),
+            src_ip=client,
+            dst_ip="8.8.8.8",
+            src_port=40000 + i,
+            dst_port=53,
+            l4_proto="udp",
+            l7_proto="dns",
+            bytes_sent=50,
+            bytes_recv=120,
+            packets_sent=1,
+            packets_recv=1,
+            l7_meta=f"DNS 请求: {domain} (A) | DNS 响应: {domain} -> 1.2.3.{i % 3 + 1} (A)",
+            duration_ms=30,
+            dst_host=domain,
+        ))
+    await store.write_flows_batch(flows)
+    return store, path
+
+
+@pytest.mark.asyncio
+class TestDNSQueries:
+    """DNS 统计查询测试。"""
+
+    async def test_query_dns_overview_empty(self, sqlite_store: SQLiteStore):
+        since = datetime.now(timezone.utc) - timedelta(hours=1)
+        overview = await sqlite_store.query_dns_overview(since=since)
+        assert overview.total_queries == 0
+        assert overview.total_bytes == 0
+        assert overview.distinct_domains == 0
+        assert overview.distinct_clients == 0
+
+    async def test_query_dns_overview_with_data(self):
+        store, path = await store_with_dns_data()
+        try:
+            since = datetime.now(timezone.utc) - timedelta(hours=1)
+            overview = await store.query_dns_overview(since=since)
+            assert overview.total_queries == 10
+            assert overview.distinct_domains == 3
+            assert overview.distinct_clients == 4
+            assert overview.total_bytes > 0
+        finally:
+            await store.close()
+            os.unlink(path)
+
+    async def test_query_dns_top_domains(self):
+        store, path = await store_with_dns_data()
+        try:
+            since = datetime.now(timezone.utc) - timedelta(hours=1)
+            domains = await store.query_dns_top_domains(since=since, limit=5)
+            assert len(domains) == 3
+            assert domains[0].host in {"www.site0.com", "www.site1.com", "www.site2.com"}
+            assert domains[0].query_count > 0
+        finally:
+            await store.close()
+            os.unlink(path)
+
+    async def test_query_dns_top_clients(self):
+        store, path = await store_with_dns_data()
+        try:
+            since = datetime.now(timezone.utc) - timedelta(hours=1)
+            clients = await store.query_dns_top_clients(since=since, limit=5)
+            assert len(clients) == 4
+            assert clients[0].src_ip.startswith("10.0.0.")
+        finally:
+            await store.close()
+            os.unlink(path)
+
+    async def test_query_dns_timeseries(self):
+        store, path = await store_with_dns_data()
+        try:
+            now = datetime.now(timezone.utc)
+            since = now - timedelta(minutes=30)
+            points = await store.query_dns_timeseries(since=since, span_seconds=1800, bucket_seconds=300)
+            assert len(points) > 0
+            assert all(p.query_count >= 0 for p in points)
+            total_queries = sum(p.query_count for p in points)
+            assert total_queries >= 10
+        finally:
+            await store.close()
+            os.unlink(path)
+
+    async def test_query_dns_details(self):
+        store, path = await store_with_dns_data()
+        try:
+            since = datetime.now(timezone.utc) - timedelta(hours=1)
+            details = await store.query_dns_details(since=since, limit=100)
+            assert len(details) == 10
+            detail = details[0]
+            assert detail.domain.startswith("www.site")
+            assert detail.client_ip.startswith("10.0.0.")
+            # request_info/response_info 已剥离 "DNS 请求:"/"DNS 响应:" 前缀
+            assert "(A)" in (detail.request_info or "")
+            assert detail.domain in (detail.request_info or "")
+            assert "->" in (detail.response_info or "")
+        finally:
+            await store.close()
+            os.unlink(path)
+
+    async def test_query_dns_details_filter(self):
+        store, path = await store_with_dns_data()
+        try:
+            since = datetime.now(timezone.utc) - timedelta(hours=1)
+            details = await store.query_dns_details(since=since, limit=100, domain="site0")
+            assert len(details) > 0
+            assert all("site0" in d.domain for d in details)
+        finally:
+            await store.close()
+            os.unlink(path)
+
+    async def test_query_dns_details_empty(self, sqlite_store: SQLiteStore):
+        since = datetime.now(timezone.utc) - timedelta(hours=1)
+        details = await sqlite_store.query_dns_details(since=since, limit=100)
+        assert details == []
+
+    async def test_split_dns_req_res(self):
+        """_split_dns_req_res 辅助函数。"""
+        from app.storage.sqlite_store import _split_dns_req_res
+        req, resp = _split_dns_req_res(
+            "DNS 请求: www.a.com (A) | DNS 响应: www.a.com -> 1.2.3.4 (A)"
+        )
+        assert "www.a.com (A)" in req
+        assert "1.2.3.4" in resp
+        # 无响应内容时
+        req2, resp2 = _split_dns_req_res("DNS 请求: www.a.com (A)")
+        assert "www.a.com" in req2
+        assert resp2 == ""
