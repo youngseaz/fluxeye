@@ -230,6 +230,22 @@ class DnsTimePoint(BaseModel):
     bytes_total: int = 0
 
 
+class DnsQueryDetail(BaseModel):
+    """DNS 查询明细（按 域名+客户端+服务端 分组）。"""
+    domain: str
+    client_ip: str
+    client_mac: str = ""
+    server_ip: str = ""
+    first_seen: Optional[datetime] = None   # 首次请求时间
+    last_seen: Optional[datetime] = None    # 最近一次请求时间
+    request_count: int = 0   # DNS 请求包数
+    response_count: int = 0  # DNS 响应包数
+    request_bytes: int = 0   # DNS 请求字节
+    response_bytes: int = 0  # DNS 响应字节
+    request_info: str = ""  # DNS 请求内容（域名+类型，如 www.baidu.com (A)）
+    response_info: str = "" # DNS 响应内容（答案，如 www.baidu.com -> 1.2.3.4）
+
+
 # ── 设备画像 ────────────────────────────────────────────
 
 class PeerStat(BaseModel):

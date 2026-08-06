@@ -13,6 +13,7 @@ from app.models.schemas import (
     DnsClientStat,
     DnsDomainStat,
     DnsOverview,
+    DnsQueryDetail,
     DnsTimePoint,
     DomainStat,
     FlowRecord,
@@ -208,6 +209,16 @@ class StorageBackend(ABC):
         bucket_seconds: int,
     ) -> list[DnsTimePoint]:
         """查询 DNS 活动时序（默认空实现，SQLite 覆盖）。"""
+        return []
+
+    async def query_dns_details(
+        self,
+        since: datetime,
+        limit: int = 100,
+        domain: str = "",
+        client: str = "",
+    ) -> list[DnsQueryDetail]:
+        """查询 DNS 查询明细（默认空实现，SQLite 覆盖）。"""
         return []
 
     # ── 设备画像 ────────────────────────────────────────

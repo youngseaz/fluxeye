@@ -380,6 +380,145 @@ def extract_dns_query(payload: bytes) -> str:
     return ".".join(label.decode("utf-8", errors="replace") for label in labels)
 
 
+# ── DNS 报文深度解析（请求域名+类型 / 响应答案）──────────
+
+# DNS 资源记录类型映射
+_DNS_TYPES = {
+    1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 12: "PTR", 15: "MX",
+    16: "TXT", 28: "AAAA", 33: "SRV", 41: "OPT", 43: "DS", 46: "RRSIG",
+    47: "NSEC", 48: "DNSKEY", 255: "ANY",
+}
+
+
+def _parse_dns_name(payload: bytes, pos: int) -> tuple[str | None, int]:
+    """解析 DNS 名称（支持压缩指针 0xC0 0xXX），返回 (name, 读取结束位置)。
+
+    Args:
+        payload: DNS 报文
+        pos: 起始偏移
+
+    Returns:
+        (name, end_pos)，解析失败返回 (None, 原始 pos)。
+    """
+    labels: list[str] = []
+    end_pos = pos
+    jumped = False
+    max_loops = 128
+    while max_loops > 0:
+        max_loops -= 1
+        if pos >= len(payload):
+            return None, end_pos
+        length = payload[pos]
+        if length == 0:  # 名称结束
+            if not jumped:
+                end_pos = pos + 1
+            return ".".join(labels) if labels else "", end_pos
+        if length & 0xC0:  # 压缩指针
+            if pos + 1 >= len(payload):
+                return None, end_pos
+            ptr = ((length & 0x3F) << 8) | payload[pos + 1]
+            if not jumped:
+                end_pos = pos + 2
+            jumped = True
+            pos = ptr
+            continue
+        pos += 1
+        if pos + length > len(payload):
+            return None, end_pos
+        labels.append(payload[pos:pos + length].decode("utf-8", errors="replace"))
+        pos += length
+    return None, end_pos
+
+
+def _format_dns_rdata(rd_type: int, rdata: bytes) -> str:
+    """格式化 DNS 资源记录 RDATA 为可读字符串。"""
+    try:
+        if rd_type == 1 and len(rdata) == 4:  # A
+            return ".".join(str(b) for b in rdata)
+        if rd_type == 28 and len(rdata) == 16:  # AAAA
+            return str(ipaddress.IPv6Address(rdata))
+        if rd_type in (2, 5, 12):  # NS / CNAME / PTR → 域名
+            name, _ = _parse_dns_name(rdata, 0)
+            return name or ""
+        if rd_type == 16:  # TXT
+            return rdata.decode("utf-8", errors="replace")[:200]
+        if rd_type == 15 and len(rdata) >= 3:  # MX: preference + name
+            pref = int.from_bytes(rdata[:2], "big")
+            name, _ = _parse_dns_name(rdata, 2)
+            return f"{pref} {name or ''}"
+    except Exception:
+        pass
+    return rdata.hex()
+
+
+def parse_dns_payload(payload: bytes) -> dict:
+    """深度解析 DNS 报文，提取请求问题与响应答案。
+
+    Args:
+        payload: UDP 载荷（DNS 消息）。
+
+    Returns:
+        {
+            "is_response": bool,           # 是否响应包
+            "questions": [{"name","qtype"}],  # 请求：域名 + 类型(A/AAAA/...)
+            "answers": [{"name","type","data","ttl"}],  # 响应：答案记录
+        }
+        无法解析返回空 dict。
+    """
+    if len(payload) < 12:
+        return {}
+    flags = struct.unpack("!H", payload[2:4])[0]
+    is_response = bool((flags >> 15) & 1)
+    qdcount = struct.unpack("!H", payload[4:6])[0]
+    ancount = struct.unpack("!H", payload[6:8])[0]
+
+    pos = 12
+    questions: list[dict] = []
+    for _ in range(qdcount):
+        if pos >= len(payload):
+            break
+        name, pos = _parse_dns_name(payload, pos)
+        if pos is None or pos + 4 > len(payload):
+            break
+        qtype = struct.unpack("!H", payload[pos:pos + 2])[0]
+        pos += 4  # QTYPE + QCLASS
+        questions.append({
+            "name": name or "?",
+            "qtype": _DNS_TYPES.get(qtype, str(qtype)),
+        })
+
+    answers: list[dict] = []
+    for _ in range(ancount):
+        if pos >= len(payload):
+            break
+        name, pos = _parse_dns_name(payload, pos)
+        if pos is None or pos + 10 > len(payload):
+            break
+        atype = struct.unpack("!H", payload[pos:pos + 2])[0]
+        pos += 2  # TYPE
+        pos += 2  # CLASS
+        ttl = struct.unpack("!I", payload[pos:pos + 4])[0]
+        pos += 4
+        rdlen = struct.unpack("!H", payload[pos:pos + 2])[0]
+        pos += 2
+        if pos + rdlen > len(payload):
+            break
+        rdata = payload[pos:pos + rdlen]
+        pos += rdlen
+        answers.append({
+            "name": name or "?",
+            "type": _DNS_TYPES.get(atype, str(atype)),
+            "data": _format_dns_rdata(atype, rdata),
+            "ttl": ttl,
+        })
+
+    return {
+        "is_response": is_response,
+        "questions": questions,
+        "answers": answers,
+    }
+
+
 def extract_host(payload: bytes, l7_proto: str) -> str:
     """从 HTTP 请求、DNS 查询、TLS SNI 或 SOCKS CONNECT 中提取目标主机/域名。"""
     if l7_proto == "http":

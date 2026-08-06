@@ -110,6 +110,21 @@ export interface DnsTimePoint {
   bytes_total: number
 }
 
+export interface DnsQueryDetail {
+  domain: string
+  client_ip: string
+  client_mac: string
+  server_ip: string
+  first_seen: string
+  last_seen: string
+  request_count: number
+  response_count: number
+  request_bytes: number
+  response_bytes: number
+  request_info: string
+  response_info: string
+}
+
 // ── 会话 ────────────────────────────────────────────
 export interface Conversation {
   id: number

@@ -51,14 +51,32 @@
     <el-row :gutter="16" style="margin-top: 16px">
       <el-col :span="12">
         <el-card shadow="hover">
-          <template #header><span>查询域名 Top {{ topLimit }}</span></template>
-          <div ref="domainChartRef" class="chart-container chart-sm"></div>
+          <template #header>
+            <span>查询域名 Top {{ topLimit }}</span>
+            <el-tag size="small" type="info" style="margin-left: 8px">次数 / 域名</el-tag>
+          </template>
+          <div class="top-list">
+            <div class="top-list-row" v-for="d in sortedTopDomains" :key="d.host">
+              <span class="top-name" :title="d.host">{{ d.host }}</span>
+              <span class="top-count">{{ d.query_count }}</span>
+            </div>
+            <el-empty v-if="topDomains.length === 0" description="暂无数据" :image-size="40" />
+          </div>
         </el-card>
       </el-col>
       <el-col :span="12">
         <el-card shadow="hover">
-          <template #header><span>查询客户端 Top {{ topLimit }}</span></template>
-          <div ref="clientChartRef" class="chart-container chart-sm"></div>
+          <template #header>
+            <span>查询客户端 Top {{ topLimit }}</span>
+            <el-tag size="small" type="info" style="margin-left: 8px">客户端 / 次数</el-tag>
+          </template>
+          <div class="top-list">
+            <div class="top-list-row" v-for="c in sortedTopClients" :key="c.src_ip">
+              <span class="top-name" :title="c.src_ip">{{ c.src_ip }}</span>
+              <span class="top-count">{{ c.query_count }}</span>
+            </div>
+            <el-empty v-if="topClients.length === 0" description="暂无数据" :image-size="40" />
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -66,24 +84,60 @@
     <!-- 域名明细表 -->
     <el-card shadow="hover" style="margin-top: 16px">
       <template #header>
-        <span>查询域名明细</span>
-        <el-tag size="small" style="margin-left: 8px" type="info">按查询次数排序</el-tag>
+        <div class="detail-header">
+          <span>
+            查询域名明细
+            <el-tag size="small" style="margin-left: 8px" type="info">每条 DNS 查询一行 · 按时间倒序</el-tag>
+          </span>
+          <div class="detail-filter">
+            <el-input
+              v-model="detailDomain"
+              placeholder="按域名搜索"
+              clearable
+              size="small"
+              style="width: 180px"
+              @keyup.enter="refreshAll"
+            />
+            <el-input
+              v-model="detailClient"
+              placeholder="按客户端 IP/MAC"
+              clearable
+              size="small"
+              style="width: 170px; margin-left: 8px"
+              @keyup.enter="refreshAll"
+            />
+            <el-button size="small" type="primary" :icon="Search" style="margin-left: 8px" @click="refreshAll">查询</el-button>
+            <el-button size="small" style="margin-left: 4px" @click="resetDetailFilter">重置</el-button>
+          </div>
+        </div>
       </template>
-      <el-table :data="topDomains" size="small" stripe style="width: 100%">
+      <el-table :data="dnsQueries" size="small" stripe style="width: 100%">
         <el-table-column type="index" label="#" width="55" />
-        <el-table-column prop="host" label="域名" min-width="260" show-overflow-tooltip>
+        <el-table-column label="时间" width="160" sortable prop="last_seen">
           <template #default="{ row }">
-            <code style="font-size: 12px">{{ row.host }}</code>
+            {{ formatTime(row.last_seen) }}
           </template>
         </el-table-column>
-        <el-table-column prop="query_count" label="查询次数" width="110" align="right" sortable />
-        <el-table-column prop="percentage" label="占比" width="120" align="right">
+        <el-table-column label="请求客户端" min-width="180">
           <template #default="{ row }">
-            <el-progress :percentage="row.percentage" :stroke-width="12" />
+            <div>{{ row.client_ip }}</div>
+            <div style="font-size: 11px; color: #909399">{{ row.client_mac || '-' }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="流量" width="120" align="right">
-          <template #default="{ row }">{{ formatBytes(row.bytes_total) }}</template>
+        <el-table-column prop="server_ip" label="服务端" min-width="130">
+          <template #default="{ row }">
+            {{ row.server_ip || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="DNS 请求" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="dns-info" :title="row.request_info">{{ row.request_info || '未知' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="DNS 响应" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="dns-info" :title="row.response_info">{{ row.response_info || '未知' }}</div>
+          </template>
         </el-table-column>
       </el-table>
     </el-card>
@@ -91,15 +145,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, shallowRef, watch, type ShallowRef } from 'vue'
+import { ref, computed, onMounted, onUnmounted, shallowRef } from 'vue'
 import * as echarts from 'echarts'
 import {
-  DataLine, QuestionFilled, Monitor, Connection, Refresh,
+  DataLine, QuestionFilled, Monitor, Connection, Refresh, Search,
 } from '@element-plus/icons-vue'
 import {
-  fetchDnsOverview, fetchDnsTopDomains, fetchDnsTopClients, fetchDnsTimeseries,
+  fetchDnsOverview, fetchDnsTopDomains, fetchDnsTopClients, fetchDnsTimeseries, fetchDnsQueries,
 } from '@/services/api'
-import type { DnsOverview, DnsDomainStat, DnsClientStat, DnsTimePoint } from '@/types'
+import type { DnsOverview, DnsDomainStat, DnsClientStat, DnsTimePoint, DnsQueryDetail } from '@/types'
 
 const timeRange = ref('1h')
 const topLimit = 20
@@ -108,14 +162,13 @@ const overview = ref<DnsOverview | null>(null)
 const topDomains = ref<DnsDomainStat[]>([])
 const topClients = ref<DnsClientStat[]>([])
 const timeseries = ref<DnsTimePoint[]>([])
+const dnsQueries = ref<DnsQueryDetail[]>([])
+const detailDomain = ref('')
+const detailClient = ref('')
 const loading = ref(false)
 
 const tsChartRef = ref<HTMLElement | null>(null)
-const domainChartRef = ref<HTMLElement | null>(null)
-const clientChartRef = ref<HTMLElement | null>(null)
 const tsChart = shallowRef<echarts.ECharts | null>(null)
-const domainChart = shallowRef<echarts.ECharts | null>(null)
-const clientChart = shallowRef<echarts.ECharts | null>(null)
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`
@@ -128,12 +181,30 @@ function formatRate(qps: number): string {
   return qps.toFixed(2)
 }
 
+function formatTime(ts: string): string {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ts
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 const cards = computed(() => [
   { icon: QuestionFilled, label: 'DNS 查询', value: String(overview.value?.total_queries ?? 0), color: '#409eff' },
   { icon: DataLine, label: 'DNS 流量', value: formatBytes(overview.value?.total_bytes ?? 0), color: '#67c23a' },
   { icon: Connection, label: '独立域名', value: String(overview.value?.distinct_domains ?? 0), color: '#e6a23c' },
   { icon: Monitor, label: '查询速率', value: `${formatRate(overview.value?.query_rate ?? 0)} QPS`, color: '#f56c6c' },
 ])
+
+// 查询域名 Top：按请求次数从高到低排序
+const sortedTopDomains = computed(() =>
+  [...topDomains.value].sort((a, b) => b.query_count - a.query_count)
+)
+
+// 查询客户端 Top：按请求次数从高到低排序
+const sortedTopClients = computed(() =>
+  [...topClients.value].sort((a, b) => b.query_count - a.query_count)
+)
 
 function initTsChart() {
   if (!tsChartRef.value) return
@@ -194,69 +265,6 @@ function updateTsChart() {
   tsChart.value.setOption({ series: [{ data }] })
 }
 
-function initBarChart(instance: ShallowRef<echarts.ECharts | null>, el: HTMLElement | null) {
-  if (!el) return
-  instance.value = echarts.init(el)
-  instance.value.setOption({
-    grid: { left: 10, right: 20, top: 10, bottom: 10, containLabel: true },
-    xAxis: {
-      type: 'value',
-      minInterval: 1,
-      axisLabel: {
-        fontSize: 11,
-        color: '#909399',
-        formatter: (v: number) => {
-          if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-          if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
-          return String(v)
-        },
-      },
-      splitLine: { lineStyle: { color: '#f0f0f0' } },
-    },
-    yAxis: {
-      type: 'category',
-      inverse: true,
-      axisLabel: { fontSize: 11, color: '#303133', width: 130, overflow: 'truncate' },
-    },
-    series: [{
-      type: 'bar',
-      barMaxWidth: 16,
-      itemStyle: { color: '#409eff', borderRadius: [0, 3, 3, 0] },
-      label: {
-        show: true,
-        position: 'right',
-        fontSize: 11,
-        color: '#909399',
-        formatter: (p: any) => {
-          const v = p.value ?? 0
-          if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-          if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
-          return String(v)
-        },
-      },
-      data: [] as { value: number; name: string }[],
-    }],
-  })
-}
-
-function updateDomainChart() {
-  if (!domainChart.value) return
-  const data = topDomains.value.slice(0, topLimit).map((d) => ({
-    name: d.host,
-    value: d.query_count,
-  }))
-  domainChart.value.setOption({ series: [{ data }] })
-}
-
-function updateClientChart() {
-  if (!clientChart.value) return
-  const data = topClients.value.slice(0, topLimit).map((d) => ({
-    name: d.src_ip,
-    value: d.query_count,
-  }))
-  clientChart.value.setOption({ series: [{ data }] })
-}
-
 function intervalForRange(): string {
   const unit = timeRange.value.slice(-1)
   const val = parseInt(timeRange.value, 10)
@@ -271,38 +279,39 @@ function intervalForRange(): string {
 async function refreshAll() {
   loading.value = true
   try {
-    const [ov, dm, cl, ts] = await Promise.all([
+    // 逐项容错：单个端点失败不影响其他数据更新
+    const results = await Promise.allSettled([
       fetchDnsOverview(timeRange.value),
       fetchDnsTopDomains(timeRange.value, topLimit),
       fetchDnsTopClients(timeRange.value, topLimit),
       fetchDnsTimeseries(intervalForRange(), timeRange.value),
+      fetchDnsQueries(timeRange.value, 100, detailDomain.value, detailClient.value),
     ])
-    overview.value = ov
-    topDomains.value = dm
-    topClients.value = cl
-    timeseries.value = ts
+    if (results[0].status === 'fulfilled') overview.value = results[0].value
+    if (results[1].status === 'fulfilled') topDomains.value = results[1].value
+    if (results[2].status === 'fulfilled') topClients.value = results[2].value
+    if (results[3].status === 'fulfilled') timeseries.value = results[3].value
+    if (results[4].status === 'fulfilled') dnsQueries.value = results[4].value
     updateTsChart()
-    updateDomainChart()
-    updateClientChart()
-  } catch {
-    // 静默
   } finally {
     loading.value = false
   }
+}
+
+function resetDetailFilter() {
+  detailDomain.value = ''
+  detailClient.value = ''
+  refreshAll()
 }
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 function resizeCharts() {
   tsChart.value?.resize()
-  domainChart.value?.resize()
-  clientChart.value?.resize()
 }
 
 onMounted(async () => {
   initTsChart()
-  initBarChart(domainChart, domainChartRef.value)
-  initBarChart(clientChart, clientChartRef.value)
   await refreshAll()
   refreshTimer = setInterval(refreshAll, 15000)
   window.addEventListener('resize', resizeCharts)
@@ -312,20 +321,6 @@ onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
   window.removeEventListener('resize', resizeCharts)
   tsChart.value?.dispose()
-  domainChart.value?.dispose()
-  clientChart.value?.dispose()
-})
-
-watch([domainChartRef, clientChartRef], () => {
-  // 元素挂载后初始化图表
-  if (!domainChart.value && domainChartRef.value) {
-    initBarChart(domainChart, domainChartRef.value)
-    updateDomainChart()
-  }
-  if (!clientChart.value && clientChartRef.value) {
-    initBarChart(clientChart, clientChartRef.value)
-    updateClientChart()
-  }
 })
 </script>
 
@@ -377,5 +372,56 @@ watch([domainChartRef, clientChartRef], () => {
 }
 .chart-sm {
   height: 320px;
+}
+.dns-info {
+  font-size: 12px;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 210px;
+}
+.detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.detail-filter {
+  display: flex;
+  align-items: center;
+}
+/* 查询域名 Top 列表：左边域名，右边次数 */
+.top-list {
+  height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.top-list-row {
+  display: flex;
+  align-items: center;
+  padding: 7px 6px;
+  border-bottom: 1px solid #f2f4f7;
+}
+.top-list-row:last-child {
+  border-bottom: none;
+}
+.top-name {
+  flex: 1;
+  text-align: left;
+  font-size: 13px;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.top-count {
+  width: 52px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #409eff;
+  text-align: right;
+  flex-shrink: 0;
 }
 </style>

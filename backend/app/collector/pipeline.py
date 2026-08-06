@@ -367,7 +367,7 @@ class CapturePipeline:
 
         # L7 元数据提取：明文协议报文解析
         from app.collector.packet import (
-            extract_dns_query, extract_host, extract_plaintext_content,
+            extract_dns_query, extract_host, extract_plaintext_content, parse_dns_payload,
         )
 
         l7_meta = ""
@@ -375,6 +375,35 @@ class CapturePipeline:
         if pkt.payload:
             # 提取目标主机/域名
             dst_host = extract_host(pkt.payload, l7_proto)
+
+            # DNS 深度解析：累积请求域名+类型 与 响应答案
+            if l7_proto == "dns":
+                dns_info = parse_dns_payload(pkt.payload)
+                if dns_info and flow_key:
+                    if flow_key not in self._flow_meta:
+                        self._flow_meta[flow_key] = {}
+                    meta = self._flow_meta[flow_key]
+                    if dns_info["is_response"]:
+                        if dns_info["answers"]:
+                            ans = "; ".join(
+                                f"{a['name']} -> {a['data']} ({a['type']})"
+                                for a in dns_info["answers"]
+                            )
+                            meta["dns_response"] = f"DNS 响应: {ans}"
+                    else:
+                        if dns_info["questions"]:
+                            qs = ", ".join(
+                                f"{q['name']} ({q['qtype']})"
+                                for q in dns_info["questions"]
+                            )
+                            meta["dns_request"] = f"DNS 请求: {qs}"
+                    parts = []
+                    if meta.get("dns_request"):
+                        parts.append(meta["dns_request"])
+                    if meta.get("dns_response"):
+                        parts.append(meta["dns_response"])
+                    if parts:
+                        l7_meta = " | ".join(parts)
 
             content = extract_plaintext_content(pkt.payload)
             if content:

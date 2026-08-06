@@ -9,6 +9,7 @@ import type {
   DnsClientStat,
   DnsDomainStat,
   DnsOverview,
+  DnsQueryDetail,
   DnsTimePoint,
   DomainStat,
   GeoConfigInfo,
@@ -172,6 +173,13 @@ export async function fetchDnsTopClients(timeRange = '1h', limit = 20): Promise<
 export async function fetchDnsTimeseries(interval = '60s', timeRange = '1h'): Promise<DnsTimePoint[]> {
   const { data } = await http.get('/traffic/dns/timeseries', {
     params: { interval, time_range: timeRange },
+  })
+  return data
+}
+
+export async function fetchDnsQueries(timeRange = '1h', limit = 100, domain = '', client = ''): Promise<DnsQueryDetail[]> {
+  const { data } = await http.get('/traffic/dns/queries', {
+    params: { time_range: timeRange, limit, domain: domain || undefined, client: client || undefined },
   })
   return data
 }

@@ -23,6 +23,7 @@ from app.models.schemas import (
     DnsClientStat,
     DnsDomainStat,
     DnsOverview,
+    DnsQueryDetail,
     DnsTimePoint,
     DomainStat,
     FlowRecord,
@@ -39,6 +40,29 @@ from app.models.schemas import (
     TrafficTotal,
 )
 from app.storage.base import StorageBackend
+
+
+def _split_dns_req_res(metas: str) -> tuple[str, str]:
+    """从聚合的 l7_meta 中提取 DNS 请求内容与响应内容。
+
+    l7_meta 格式: "DNS 请求: q... | DNS 响应: a... | ..."，多流用 "||" 连接。
+    返回 (request_info, response_info)，去重并截断。
+    """
+    req: list[str] = []
+    res: list[str] = []
+    for part in metas.split("|"):
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith("DNS 请求:"):
+            val = part[len("DNS 请求:"):].strip()
+            if val and val not in req:
+                req.append(val)
+        elif part.startswith("DNS 响应:"):
+            val = part[len("DNS 响应:"):].strip()
+            if val and val not in res:
+                res.append(val)
+    return "; ".join(req)[:500], "; ".join(res)[:500]
 
 
 class SQLiteStore(StorageBackend):
@@ -1847,6 +1871,72 @@ class SQLiteStore(StorageBackend):
                 timestamp=datetime.fromtimestamp(bucket_start),
                 query_count=r["query_count"] if r else 0,
                 bytes_total=(r["bytes_total"] or 0) if r else 0,
+            ))
+        return result
+
+    async def query_dns_details(
+        self,
+        since: datetime,
+        limit: int = 100,
+        domain: str = "",
+        client: str = "",
+    ) -> list[DnsQueryDetail]:
+        """查询 DNS 查询明细：按 域名+客户端+服务端 分组，含请求/响应统计。
+
+        Args:
+            domain: 域名模糊过滤（匹配 dst_host）。
+            client: 客户端模糊过滤（匹配 src_ip 或 src_mac）。
+        """
+        assert self._conn is not None
+        since_ts = int(since.timestamp())
+        # 条件均为硬编码 + 参数绑定，f-string 安全
+        conditions = [
+            "timestamp_s >= ?",
+            "l7_proto = 'dns'",
+            "dst_host != '' AND dst_host IS NOT NULL",
+        ]
+        params: list = [since_ts]
+        if domain and domain.strip():
+            conditions.append("dst_host LIKE ?")
+            params.append(f"%{domain.strip()}%")
+        if client and client.strip():
+            conditions.append("(src_ip LIKE ? OR src_mac LIKE ?)")
+            params.append(f"%{client.strip()}%")
+            params.append(f"%{client.strip()}%")
+
+        cursor = await self._rconn().execute(
+            f"""SELECT dst_host AS domain,
+                      src_ip, src_mac, dst_ip,
+                      timestamp_s AS ts,
+                      bytes_sent AS req_bytes,
+                      bytes_recv AS resp_bytes,
+                      packets_sent AS req_packets,
+                      packets_recv AS resp_packets,
+                      l7_meta AS metas
+               FROM flows
+               WHERE {' AND '.join(conditions)}
+               ORDER BY timestamp_s DESC
+               LIMIT ?""",
+            (*params, limit),
+        )
+        rows = await cursor.fetchall()
+        result: list[DnsQueryDetail] = []
+        for r in rows:
+            request_info, response_info = _split_dns_req_res(r["metas"] or "")
+            ts = datetime.fromtimestamp(r["ts"]) if r["ts"] else None
+            result.append(DnsQueryDetail(
+                domain=r["domain"],
+                client_ip=r["src_ip"],
+                client_mac=r["src_mac"] or "",
+                server_ip=r["dst_ip"] or "",
+                first_seen=ts,
+                last_seen=ts,
+                request_count=r["req_packets"] or 0,
+                response_count=r["resp_packets"] or 0,
+                request_bytes=r["req_bytes"] or 0,
+                response_bytes=r["resp_bytes"] or 0,
+                request_info=request_info,
+                response_info=response_info,
             ))
         return result
 

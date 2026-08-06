@@ -11,6 +11,7 @@ from app.models.schemas import (
     DnsClientStat,
     DnsDomainStat,
     DnsOverview,
+    DnsQueryDetail,
     DnsTimePoint,
     DomainStat,
     ProtocolDistribution,
@@ -325,4 +326,24 @@ async def get_dns_timeseries(
         since=since,
         span_seconds=int(span.total_seconds()),
         bucket_seconds=bucket_seconds,
+    )
+
+
+@router.get("/traffic/dns/queries", response_model=list[DnsQueryDetail])
+async def get_dns_queries(
+    limit: int = Query(100, ge=1, le=500, description="返回 Top N 条 DNS 查询明细"),
+    time_range: str = Query("1h", description="时间范围，如 5m, 1h, 6h"),
+    domain: Optional[str] = Query(None, description="按域名模糊查询"),
+    client: Optional[str] = Query(None, description="按客户端 IP/MAC 模糊查询"),
+    storage: StorageBackend = Depends(get_storage),
+):
+    """获取 DNS 查询明细（域名 + 客户端 + 服务端 + 请求/响应统计）。
+
+    支持按域名或客户端（IP/MAC）过滤。
+    """
+    span = _parse_time_range(time_range)
+    from datetime import datetime, timezone
+    since = datetime.now(timezone.utc) - span
+    return await storage.query_dns_details(
+        since=since, limit=limit, domain=domain or "", client=client or "",
     )
