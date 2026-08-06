@@ -337,6 +337,9 @@ class CapturePipeline:
         # DPI 检测（使用 per-flow 多包检测）
         flow_key = self.dpi.get_flow_key(pkt) if self.dpi else ""
         l7_proto = self.dpi.detect(pkt, flow_key=flow_key) if self.dpi else pkt.l7_proto
+        # 统一转小写：nDPI 返回大写协议名(DNS/TLS/SOCKS)，下游检查(extract_host 等)均为小写，
+        # 大小写不一致会导致 DNS 域名/请求响应内容等无法提取
+        l7_proto = (l7_proto or "unknown").lower()
 
         # 获取协议分类（video / streaming / download / web 等）
         l7_category = self.dpi.detect_category(flow_key) if self.dpi and flow_key else ""

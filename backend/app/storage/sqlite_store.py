@@ -1754,7 +1754,7 @@ class SQLiteStore(StorageBackend):
                       COUNT(DISTINCT dst_host) AS distinct_domains,
                       COUNT(DISTINCT src_ip) AS distinct_clients
                FROM flows
-               WHERE timestamp_s >= ? AND l7_proto = 'dns'""",
+               WHERE timestamp_s >= ? AND LOWER(l7_proto) = 'dns'""",
             (since_ts,),
         )
         row = await cursor.fetchone()
@@ -1782,7 +1782,7 @@ class SQLiteStore(StorageBackend):
                       COUNT(*) AS query_count,
                       SUM(bytes_sent + bytes_recv) AS bytes_total
                FROM flows
-               WHERE timestamp_s >= ? AND l7_proto = 'dns'
+               WHERE timestamp_s >= ? AND LOWER(l7_proto) = 'dns'
                  AND dst_host != '' AND dst_host IS NOT NULL
                GROUP BY dst_host
                ORDER BY query_count DESC
@@ -1814,7 +1814,7 @@ class SQLiteStore(StorageBackend):
                       COUNT(*) AS query_count,
                       SUM(bytes_sent + bytes_recv) AS bytes_total
                FROM flows
-               WHERE timestamp_s >= ? AND l7_proto = 'dns'
+               WHERE timestamp_s >= ? AND LOWER(l7_proto) = 'dns'
                  AND src_ip != '' AND src_ip IS NOT NULL
                GROUP BY src_ip
                ORDER BY query_count DESC
@@ -1848,7 +1848,7 @@ class SQLiteStore(StorageBackend):
                       COUNT(*) AS query_count,
                       SUM(bytes_sent + bytes_recv) AS bytes_total
                FROM flows
-               WHERE timestamp_s >= ? AND l7_proto = 'dns'
+               WHERE timestamp_s >= ? AND LOWER(l7_proto) = 'dns'
                GROUP BY bucket
                ORDER BY bucket""",
             (bucket_seconds, bucket_seconds, since_ts),
@@ -1892,7 +1892,7 @@ class SQLiteStore(StorageBackend):
         # 条件均为硬编码 + 参数绑定，f-string 安全
         conditions = [
             "timestamp_s >= ?",
-            "l7_proto = 'dns'",
+            "LOWER(l7_proto) = 'dns'",
             "dst_host != '' AND dst_host IS NOT NULL",
         ]
         params: list = [since_ts]
