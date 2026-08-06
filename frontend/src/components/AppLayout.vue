@@ -13,10 +13,20 @@
         text-color="#bfcbd9"
         active-text-color="#409eff"
       >
-        <el-menu-item index="/">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>实时仪表盘</span>
-        </el-menu-item>
+        <el-sub-menu index="/">
+          <template #title>
+            <el-icon><DataAnalysis /></el-icon>
+            <span>实时仪表盘</span>
+          </template>
+          <el-menu-item index="/">
+            <el-icon><Odometer /></el-icon>
+            <span>总览</span>
+          </el-menu-item>
+          <el-menu-item index="/dns">
+            <el-icon><Search /></el-icon>
+            <span>DNS仪表盘</span>
+          </el-menu-item>
+        </el-sub-menu>
         <el-menu-item index="/live-sessions">
           <el-icon><Monitor /></el-icon>
           <span>实时会话</span>
@@ -77,7 +87,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  Monitor, DataAnalysis, Search, Setting, Avatar,
+  Monitor, DataAnalysis, Search, Setting, Avatar, Odometer,
   Link, WarningFilled, Refresh,
 } from '@element-plus/icons-vue'
 import { useTrafficStore } from '@/stores/traffic'

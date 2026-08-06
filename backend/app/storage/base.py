@@ -10,6 +10,10 @@ from app.models.schemas import (
     Conversation,
     DeviceProfile,
     DeviceProfileList,
+    DnsClientStat,
+    DnsDomainStat,
+    DnsOverview,
+    DnsTimePoint,
     DomainStat,
     FlowRecord,
     Page,
@@ -170,6 +174,41 @@ class StorageBackend(ABC):
     ) -> list[ServiceStat]:
         """查询应用服务流量统计。"""
         ...
+
+    # ── DNS 统计 ────────────────────────────────────────
+
+    async def query_dns_overview(
+        self,
+        since: datetime,
+        time_range: str = "1h",
+    ) -> DnsOverview:
+        """查询 DNS 总览统计（默认空实现，SQLite 覆盖）。"""
+        return DnsOverview(time_range=time_range)
+
+    async def query_dns_top_domains(
+        self,
+        since: datetime,
+        limit: int = 20,
+    ) -> list[DnsDomainStat]:
+        """查询 DNS 查询次数 Top N 域名（默认空实现，SQLite 覆盖）。"""
+        return []
+
+    async def query_dns_top_clients(
+        self,
+        since: datetime,
+        limit: int = 20,
+    ) -> list[DnsClientStat]:
+        """查询 DNS 查询次数 Top N 客户端（默认空实现，SQLite 覆盖）。"""
+        return []
+
+    async def query_dns_timeseries(
+        self,
+        since: datetime,
+        span_seconds: int,
+        bucket_seconds: int,
+    ) -> list[DnsTimePoint]:
+        """查询 DNS 活动时序（默认空实现，SQLite 覆盖）。"""
+        return []
 
     # ── 设备画像 ────────────────────────────────────────
 

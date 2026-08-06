@@ -8,6 +8,10 @@ from typing import Optional
 from app.models.schemas import (
     AppStat,
     Conversation,
+    DnsClientStat,
+    DnsDomainStat,
+    DnsOverview,
+    DnsTimePoint,
     DomainStat,
     ProtocolDistribution,
     ProtocolStat,
@@ -259,3 +263,66 @@ def _parse_time_range(time_range: str):
     from datetime import timedelta
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     return timedelta(seconds=value * multipliers.get(unit, 60))
+
+
+# ── DNS 统计 ─────────────────────────────────────────
+
+@router.get("/traffic/dns/overview", response_model=DnsOverview)
+async def get_dns_overview(
+    time_range: str = Query("1h", description="时间范围，如 5m, 1h, 6h"),
+    storage: StorageBackend = Depends(get_storage),
+):
+    """获取 DNS 总览统计。"""
+    span = _parse_time_range(time_range)
+    from datetime import datetime, timezone
+    since = datetime.now(timezone.utc) - span
+    return await storage.query_dns_overview(since=since, time_range=time_range)
+
+
+@router.get("/traffic/dns/top-domains", response_model=list[DnsDomainStat])
+async def get_dns_top_domains(
+    limit: int = Query(20, ge=1, le=100, description="返回 Top N 域名"),
+    time_range: str = Query("1h", description="时间范围，如 5m, 1h, 6h"),
+    storage: StorageBackend = Depends(get_storage),
+):
+    """获取 DNS 查询次数最多的域名。"""
+    span = _parse_time_range(time_range)
+    from datetime import datetime, timezone
+    since = datetime.now(timezone.utc) - span
+    return await storage.query_dns_top_domains(since=since, limit=limit)
+
+
+@router.get("/traffic/dns/top-clients", response_model=list[DnsClientStat])
+async def get_dns_top_clients(
+    limit: int = Query(20, ge=1, le=100, description="返回 Top N 客户端"),
+    time_range: str = Query("1h", description="时间范围，如 5m, 1h, 6h"),
+    storage: StorageBackend = Depends(get_storage),
+):
+    """获取 DNS 查询次数最多的客户端。"""
+    span = _parse_time_range(time_range)
+    from datetime import datetime, timezone
+    since = datetime.now(timezone.utc) - span
+    return await storage.query_dns_top_clients(since=since, limit=limit)
+
+
+@router.get("/traffic/dns/timeseries", response_model=list[DnsTimePoint])
+async def get_dns_timeseries(
+    interval: str = Query("60s", description="时间桶间隔，如 10s, 30s, 60s"),
+    time_range: str = Query("1h", description="时间范围，如 5m, 1h, 6h"),
+    storage: StorageBackend = Depends(get_storage),
+):
+    """获取 DNS 活动时序（按时间桶聚合）。"""
+    span = _parse_time_range(time_range)
+    bucket_map = {"s": 1, "m": 60}
+    bucket_seconds = 60
+    try:
+        bucket_seconds = int(interval[:-1]) * bucket_map.get(interval[-1], 1)
+    except (ValueError, IndexError):
+        bucket_seconds = 60
+    from datetime import datetime, timezone
+    since = datetime.now(timezone.utc) - span
+    return await storage.query_dns_timeseries(
+        since=since,
+        span_seconds=int(span.total_seconds()),
+        bucket_seconds=bucket_seconds,
+    )

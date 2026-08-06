@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -20,6 +20,10 @@ from app.models.schemas import (
     Conversation,
     DeviceProfile,
     DeviceProfileList,
+    DnsClientStat,
+    DnsDomainStat,
+    DnsOverview,
+    DnsTimePoint,
     DomainStat,
     FlowRecord,
     Page,
@@ -1709,6 +1713,142 @@ class SQLiteStore(StorageBackend):
             )
             for svc, info in sorted_services[:limit]
         ]
+
+    # ── DNS 统计 ────────────────────────────────────────
+
+    async def query_dns_overview(
+        self,
+        since: datetime,
+        time_range: str = "1h",
+    ) -> DnsOverview:
+        """查询 DNS 总览统计。"""
+        assert self._conn is not None
+        since_ts = int(since.timestamp())
+        cursor = await self._rconn().execute(
+            """SELECT COUNT(*) AS total_queries,
+                      COALESCE(SUM(bytes_sent + bytes_recv), 0) AS total_bytes,
+                      COUNT(DISTINCT dst_host) AS distinct_domains,
+                      COUNT(DISTINCT src_ip) AS distinct_clients
+               FROM flows
+               WHERE timestamp_s >= ? AND l7_proto = 'dns'""",
+            (since_ts,),
+        )
+        row = await cursor.fetchone()
+        total = row["total_queries"] or 0
+        span = max(1, int((datetime.now(timezone.utc) - since).total_seconds()))
+        return DnsOverview(
+            total_queries=total,
+            total_bytes=row["total_bytes"] or 0,
+            distinct_domains=row["distinct_domains"] or 0,
+            distinct_clients=row["distinct_clients"] or 0,
+            query_rate=round(total / span, 2),
+            time_range=time_range,
+        )
+
+    async def query_dns_top_domains(
+        self,
+        since: datetime,
+        limit: int = 20,
+    ) -> list[DnsDomainStat]:
+        """查询 DNS 查询次数 Top N 域名。"""
+        assert self._conn is not None
+        since_ts = int(since.timestamp())
+        cursor = await self._rconn().execute(
+            """SELECT dst_host AS host,
+                      COUNT(*) AS query_count,
+                      SUM(bytes_sent + bytes_recv) AS bytes_total
+               FROM flows
+               WHERE timestamp_s >= ? AND l7_proto = 'dns'
+                 AND dst_host != '' AND dst_host IS NOT NULL
+               GROUP BY dst_host
+               ORDER BY query_count DESC
+               LIMIT ?""",
+            (since_ts, limit),
+        )
+        rows = await cursor.fetchall()
+        total = sum(r["query_count"] for r in rows) or 1
+        return [
+            DnsDomainStat(
+                host=r["host"],
+                query_count=r["query_count"],
+                bytes_total=r["bytes_total"] or 0,
+                percentage=round(r["query_count"] / total * 100, 2),
+            )
+            for r in rows
+        ]
+
+    async def query_dns_top_clients(
+        self,
+        since: datetime,
+        limit: int = 20,
+    ) -> list[DnsClientStat]:
+        """查询 DNS 查询次数 Top N 客户端。"""
+        assert self._conn is not None
+        since_ts = int(since.timestamp())
+        cursor = await self._rconn().execute(
+            """SELECT src_ip,
+                      COUNT(*) AS query_count,
+                      SUM(bytes_sent + bytes_recv) AS bytes_total
+               FROM flows
+               WHERE timestamp_s >= ? AND l7_proto = 'dns'
+                 AND src_ip != '' AND src_ip IS NOT NULL
+               GROUP BY src_ip
+               ORDER BY query_count DESC
+               LIMIT ?""",
+            (since_ts, limit),
+        )
+        rows = await cursor.fetchall()
+        total = sum(r["query_count"] for r in rows) or 1
+        return [
+            DnsClientStat(
+                src_ip=r["src_ip"],
+                query_count=r["query_count"],
+                bytes_total=r["bytes_total"] or 0,
+                percentage=round(r["query_count"] / total * 100, 2),
+            )
+            for r in rows
+        ]
+
+    async def query_dns_timeseries(
+        self,
+        since: datetime,
+        span_seconds: int,
+        bucket_seconds: int = 60,
+    ) -> list[DnsTimePoint]:
+        """查询 DNS 活动时序（按时间桶聚合，补齐空桶）。"""
+        assert self._conn is not None
+        since_ts = int(since.timestamp())
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        cursor = await self._rconn().execute(
+            """SELECT (timestamp_s / ?) * ? AS bucket,
+                      COUNT(*) AS query_count,
+                      SUM(bytes_sent + bytes_recv) AS bytes_total
+               FROM flows
+               WHERE timestamp_s >= ? AND l7_proto = 'dns'
+               GROUP BY bucket
+               ORDER BY bucket""",
+            (bucket_seconds, bucket_seconds, since_ts),
+        )
+        rows = await cursor.fetchall()
+        seen = {r["bucket"]: r for r in rows}
+
+        end_bucket = now_ts // bucket_seconds
+        start_bucket = since_ts // bucket_seconds
+        # 限制桶数量，避免时间范围过大时生成过多空桶
+        max_buckets = max(1, span_seconds // bucket_seconds) + 2
+        if end_bucket - start_bucket > max_buckets:
+            start_bucket = end_bucket - max_buckets
+
+        result: list[DnsTimePoint] = []
+        for b in range(start_bucket, end_bucket + 1):
+            bucket_start = b * bucket_seconds
+            r = seen.get(bucket_start)
+            result.append(DnsTimePoint(
+                timestamp=datetime.fromtimestamp(bucket_start),
+                query_count=r["query_count"] if r else 0,
+                bytes_total=(r["bytes_total"] or 0) if r else 0,
+            ))
+        return result
 
     # ── 设备画像 ────────────────────────────────────────
 

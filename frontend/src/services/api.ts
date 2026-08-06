@@ -6,6 +6,10 @@ import type {
   Conversation,
   DeviceProfile,
   DeviceProfileList,
+  DnsClientStat,
+  DnsDomainStat,
+  DnsOverview,
+  DnsTimePoint,
   DomainStat,
   GeoConfigInfo,
   GeoUpdateStatus,
@@ -138,6 +142,36 @@ export async function fetchTrafficTotals(timeRange = '5m'): Promise<TrafficTotal
 export async function fetchServicesStats(timeRange = '1h', limit = 20): Promise<ServiceStat[]> {
   const { data } = await http.get('/traffic/services', {
     params: { time_range: timeRange, limit },
+  })
+  return data
+}
+
+// ── DNS 统计 ─────────────────────────────────────────
+
+export async function fetchDnsOverview(timeRange = '1h'): Promise<DnsOverview> {
+  const { data } = await http.get('/traffic/dns/overview', {
+    params: { time_range: timeRange },
+  })
+  return data
+}
+
+export async function fetchDnsTopDomains(timeRange = '1h', limit = 20): Promise<DnsDomainStat[]> {
+  const { data } = await http.get('/traffic/dns/top-domains', {
+    params: { time_range: timeRange, limit },
+  })
+  return data
+}
+
+export async function fetchDnsTopClients(timeRange = '1h', limit = 20): Promise<DnsClientStat[]> {
+  const { data } = await http.get('/traffic/dns/top-clients', {
+    params: { time_range: timeRange, limit },
+  })
+  return data
+}
+
+export async function fetchDnsTimeseries(interval = '60s', timeRange = '1h'): Promise<DnsTimePoint[]> {
+  const { data } = await http.get('/traffic/dns/timeseries', {
+    params: { interval, time_range: timeRange },
   })
   return data
 }

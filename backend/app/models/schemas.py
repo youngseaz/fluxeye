@@ -195,6 +195,41 @@ class TrafficTotal(BaseModel):
     time_range: str = "5m"
 
 
+# ── DNS 统计 ─────────────────────────────────────────
+
+class DnsOverview(BaseModel):
+    """DNS 总览统计。"""
+    total_queries: int = 0        # DNS 会话/查询数
+    total_bytes: int = 0          # DNS 流量字节数
+    distinct_domains: int = 0     # 不同查询域名数
+    distinct_clients: int = 0     # 不同客户端数
+    query_rate: float = 0.0       # 每秒查询数 (QPS)
+    time_range: str = "1h"
+
+
+class DnsDomainStat(BaseModel):
+    """DNS 查询域名统计。"""
+    host: str
+    query_count: int = 0
+    bytes_total: int = 0
+    percentage: float = 0.0
+
+
+class DnsClientStat(BaseModel):
+    """DNS 查询客户端统计。"""
+    src_ip: str
+    query_count: int = 0
+    bytes_total: int = 0
+    percentage: float = 0.0
+
+
+class DnsTimePoint(BaseModel):
+    """DNS 活动时序数据点。"""
+    timestamp: datetime
+    query_count: int = 0
+    bytes_total: int = 0
+
+
 # ── 设备画像 ────────────────────────────────────────────
 
 class PeerStat(BaseModel):

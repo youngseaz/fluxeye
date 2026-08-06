@@ -12,6 +12,12 @@ const router = createRouter({
       meta: { title: '实时仪表盘' },
     },
     {
+      path: '/dns',
+      name: 'dns-dashboard',
+      component: () => import('@/views/DNSDashboard.vue'),
+      meta: { title: 'DNS仪表盘' },
+    },
+    {
       path: '/live-sessions',
       name: 'live-sessions',
       component: () => import('@/views/LiveSessions.vue'),

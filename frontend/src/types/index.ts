@@ -80,6 +80,36 @@ export interface TimeSeriesResponse {
   data: TimePoint[]
 }
 
+// ── DNS 统计 ────────────────────────────────────────
+export interface DnsOverview {
+  total_queries: number
+  total_bytes: number
+  distinct_domains: number
+  distinct_clients: number
+  query_rate: number
+  time_range: string
+}
+
+export interface DnsDomainStat {
+  host: string
+  query_count: number
+  bytes_total: number
+  percentage: number
+}
+
+export interface DnsClientStat {
+  src_ip: string
+  query_count: number
+  bytes_total: number
+  percentage: number
+}
+
+export interface DnsTimePoint {
+  timestamp: string
+  query_count: number
+  bytes_total: number
+}
+
 // ── 会话 ────────────────────────────────────────────
 export interface Conversation {
   id: number
