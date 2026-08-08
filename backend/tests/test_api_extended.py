@@ -139,24 +139,50 @@ class TestSystemStorageEndpoints:
         data = resp.json()
         assert "enabled" in data
         assert "storage_threshold_percent" in data
+        assert "exclude_categories" in data
+        assert "exclude_protocols" in data
 
     async def test_pcap_config_post_valid(self, client: AsyncClient):
         from app.config import settings
         # 读取当前值以便恢复
         orig_enabled = settings.collector.pcap_output.enabled
         orig_threshold = settings.collector.pcap_output.storage_threshold_percent
+        orig_cats = list(settings.collector.pcap_output.exclude_categories)
+        orig_protos = list(settings.collector.pcap_output.exclude_protocols)
         try:
             resp = await client.post("/api/v1/system/pcap/config",
-                                     json={"enabled": True, "storage_threshold_percent": 70})
+                                     json={"enabled": True, "storage_threshold_percent": 70,
+                                           "exclude_categories": ["Video", "Download"],
+                                           "exclude_protocols": ["BitTorrent", "quic"]})
             assert resp.status_code == 200
             data = resp.json()
             assert data["success"] is True
             assert data["storage_threshold_percent"] == 70
-            # 验证已写入 settings
+            # 验证已写入 settings（小写归一化 + 排序）
             assert settings.collector.pcap_output.storage_threshold_percent == 70
+            assert "video" in settings.collector.pcap_output.exclude_categories
+            assert "download" in settings.collector.pcap_output.exclude_categories
+            assert "bittorrent" in settings.collector.pcap_output.exclude_protocols
         finally:
             settings.collector.pcap_output.enabled = orig_enabled
             settings.collector.pcap_output.storage_threshold_percent = orig_threshold
+            settings.collector.pcap_output.exclude_categories = orig_cats
+            settings.collector.pcap_output.exclude_protocols = orig_protos
+
+    async def test_pcap_config_post_exclude_empty(self, client: AsyncClient):
+        """空排除列表应被接受（不排除任何流量）。"""
+        from app.config import settings
+        orig_cats = list(settings.collector.pcap_output.exclude_categories)
+        orig_protos = list(settings.collector.pcap_output.exclude_protocols)
+        try:
+            resp = await client.post("/api/v1/system/pcap/config",
+                                     json={"enabled": True, "storage_threshold_percent": 90,
+                                           "exclude_categories": [], "exclude_protocols": []})
+            assert resp.status_code == 200
+            assert resp.json()["success"] is True
+        finally:
+            settings.collector.pcap_output.exclude_categories = orig_cats
+            settings.collector.pcap_output.exclude_protocols = orig_protos
 
     async def test_pcap_config_post_invalid_threshold(self, client: AsyncClient):
         resp = await client.post("/api/v1/system/pcap/config",

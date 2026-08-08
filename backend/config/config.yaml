@@ -43,6 +43,25 @@ collector:
     dir: ./data/captures/cache
     max_file_size_mb: 10
     max_file_count: 20
+    # 大流量传输（视频流/下载等）不保存 pcap，节省磁盘
+    exclude_categories:
+      - video
+      - streaming
+      - download
+      - media
+      - music
+      - filesharing
+    exclude_protocols:
+      - bittorrent
+      - quic
+      - http3
+      - ftp_data
+      - nfs
+      - smbv1
+      - smbv23
+      - rtmp
+      - mpegts
+      - mpegdash
   tls_keylog:
     filepath: ./data/tls_keys.log
     auto_reload: true

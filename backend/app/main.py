@@ -99,6 +99,8 @@ async def lifespan(app: FastAPI):
             pcap_output_dir=settings.collector.pcap_output.dir,
             pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
             pcap_max_file_count=settings.collector.pcap_output.max_file_count,
+            pcap_exclude_categories=settings.collector.pcap_output.exclude_categories,
+            pcap_exclude_protocols=settings.collector.pcap_output.exclude_protocols,
             tls_keylog_file=settings.collector.tls_keylog.filepath,
             geo_resolver=geo_resolver,
             ipfix_enabled=settings.collector.ipfix.enabled,

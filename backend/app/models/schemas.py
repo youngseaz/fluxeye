@@ -374,3 +374,6 @@ class PcapCleanupConfig(BaseModel):
     """pcap 老化清理配置。"""
     enabled: bool = True            # 是否缓存数据包
     storage_threshold_percent: int = 90
+    # 大流量传输（视频流/下载等）不保存 pcap，节省磁盘
+    exclude_categories: list[str] = []   # 按 nDPI 分类排除
+    exclude_protocols: list[str] = []    # 按协议名排除

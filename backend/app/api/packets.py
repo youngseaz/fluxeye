@@ -51,7 +51,7 @@ async def get_flow_packets(
 
     pcap_file = getattr(flow, "pcap_file", "") or ""
     if not pcap_file or not Path(pcap_file).exists():
-        raise HTTPException(404, "pcap 文件不存在或已被清理")
+        raise HTTPException(404, "该流的 pcap 缓存已清理（超出保留期或达到磁盘阈值），无法查看原始报文")
 
     packets = extract_flow_packets(
         pcap_path=pcap_file,
@@ -118,7 +118,7 @@ async def get_flow_stream(
 
     pcap_file = getattr(flow, "pcap_file", "") or ""
     if not pcap_file or not Path(pcap_file).exists():
-        raise HTTPException(404, "pcap 文件不存在或已被清理")
+        raise HTTPException(404, "该流的 pcap 缓存已清理（超出保留期或达到磁盘阈值），无法查看原始报文")
 
     result = reassemble_stream(
         pcap_path=pcap_file,

@@ -162,6 +162,8 @@ async def get_pcap_cleanup_config():
     return PcapCleanupConfig(
         enabled=settings.collector.pcap_output.enabled,
         storage_threshold_percent=settings.collector.pcap_output.storage_threshold_percent,
+        exclude_categories=list(settings.collector.pcap_output.exclude_categories),
+        exclude_protocols=list(settings.collector.pcap_output.exclude_protocols),
     )
 
 
@@ -184,6 +186,18 @@ async def update_pcap_cleanup_config(config: PcapCleanupConfig):
         settings.collector.pcap_output.storage_threshold_percent = config.storage_threshold_percent
         logger.info("pcap 清理阈值已更新为 %d%%", config.storage_threshold_percent)
 
+    # 大流量传输不保存 pcap：分类 / 协议名排除（小写去重归一化）
+    new_cats = sorted({c.strip().lower() for c in (config.exclude_categories or []) if c.strip()})
+    new_protos = sorted({p.strip().lower() for p in (config.exclude_protocols or []) if p.strip()})
+    if list(settings.collector.pcap_output.exclude_categories) != new_cats:
+        settings.collector.pcap_output.exclude_categories = new_cats
+        changed = True
+        logger.info("pcap 排除分类已更新: %s", new_cats)
+    if list(settings.collector.pcap_output.exclude_protocols) != new_protos:
+        settings.collector.pcap_output.exclude_protocols = new_protos
+        changed = True
+        logger.info("pcap 排除协议已更新: %s", new_protos)
+
     # 缓存开关变化时，重启采集流水线使其生效
     if changed:
         await _restart_pipeline_for_config()
@@ -192,6 +206,8 @@ async def update_pcap_cleanup_config(config: PcapCleanupConfig):
         "message": "数据包缓存配置已更新",
         "enabled": settings.collector.pcap_output.enabled,
         "storage_threshold_percent": settings.collector.pcap_output.storage_threshold_percent,
+        "exclude_categories": list(settings.collector.pcap_output.exclude_categories),
+        "exclude_protocols": list(settings.collector.pcap_output.exclude_protocols),
         "success": True,
     }
 
@@ -222,6 +238,8 @@ async def _restart_pipeline_for_config():
         pcap_output_dir=settings.collector.pcap_output.dir,
         pcap_max_file_size_mb=settings.collector.pcap_output.max_file_size_mb,
         pcap_max_file_count=settings.collector.pcap_output.max_file_count,
+        pcap_exclude_categories=settings.collector.pcap_output.exclude_categories,
+        pcap_exclude_protocols=settings.collector.pcap_output.exclude_protocols,
         tls_keylog_file=settings.collector.tls_keylog.filepath,
         geo_resolver=geo_resolver,
         ipfix_enabled=settings.collector.ipfix.enabled,

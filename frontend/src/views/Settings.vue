@@ -73,6 +73,34 @@
             </el-button>
           </el-descriptions-item>
         </el-descriptions>
+
+        <!-- 大流量传输不保存 pcap -->
+        <el-divider style="margin:12px 0" />
+        <div style="font-size:13px;margin-bottom:8px">
+          大流量传输不保存 pcap
+          <span style="color:#909399;font-size:11px;margin-left:6px">视频流 / 下载等命中分类或协议的流不再缓存原始报文</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:12px;white-space:nowrap;color:#606266">排除分类：</span>
+          <el-select v-model="excludeCategories" multiple filterable allow-create default-first-option
+            placeholder="输入后回车添加" size="small" style="width:240px">
+            <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+          </el-select>
+          <span style="font-size:12px;white-space:nowrap;color:#606266">排除协议：</span>
+          <el-select v-model="excludeProtocols" multiple filterable allow-create default-first-option
+            placeholder="输入后回车添加" size="small" style="width:240px">
+            <el-option v-for="p in protocolOptions" :key="p" :label="p" :value="p" />
+          </el-select>
+          <el-button size="small" type="primary" :loading="excludeSaving" @click="saveExcludePolicy">
+            保存策略
+          </el-button>
+          <el-button size="small" :loading="excludeSaving" @click="clearExcludePolicy">
+            清空
+          </el-button>
+        </div>
+        <div style="color:#909399;font-size:11px;margin-top:6px">
+          保存后自动重启采集流水线生效；留空则不排除任何流量
+        </div>
       </template>
     </el-card>
 
@@ -414,6 +442,12 @@ const cacheEnabled = ref(false)
 const cacheSaving = ref(false)
 const cleanupThreshold = ref(90)
 const cleaning = ref(false)
+const excludeCategories = ref<string[]>([])
+const excludeProtocols = ref<string[]>([])
+const excludeSaving = ref(false)
+// 建议选项（用户可自由输入任意值）
+const categoryOptions = ['video', 'streaming', 'download', 'media', 'music', 'filesharing', 'game', 'cloud', 'voip']
+const protocolOptions = ['bittorrent', 'quic', 'http3', 'ftp_data', 'nfs', 'smbv1', 'smbv23', 'rtmp', 'mpegts', 'mpegdash', 'youtube', 'netflix', 'tiktok']
 
 async function fetchStorageInfo() {
   try {
@@ -424,6 +458,8 @@ async function fetchStorageInfo() {
   try {
     const { data } = await axios.get('/api/v1/system/pcap/config')
     cacheEnabled.value = data.enabled ?? true
+    excludeCategories.value = data.exclude_categories || []
+    excludeProtocols.value = data.exclude_protocols || []
   } catch { /* ignore */ }
 }
 
@@ -456,6 +492,33 @@ async function saveCleanupThreshold() {
   } catch (e: any) {
     ElMessage.error('保存阈值失败: ' + (e?.response?.data?.detail || e?.message))
   }
+}
+
+async function clearExcludePolicy() {
+  // 清空排除分类/协议并保存（即不再排除任何流量）
+  excludeCategories.value = []
+  excludeProtocols.value = []
+  await saveExcludePolicy()
+}
+
+async function saveExcludePolicy() {
+  excludeSaving.value = true
+  try {
+    const { data } = await axios.post('/api/v1/system/pcap/config', {
+      enabled: cacheEnabled.value,
+      storage_threshold_percent: cleanupThreshold.value,
+      exclude_categories: excludeCategories.value,
+      exclude_protocols: excludeProtocols.value,
+    })
+    ElMessage.success(data.message || '排除策略已保存')
+    excludeCategories.value = data.exclude_categories || []
+    excludeProtocols.value = data.exclude_protocols || []
+    // 排除配置变化会重启采集流水线，刷新状态
+    await refreshStatus()
+  } catch (e: any) {
+    ElMessage.error('保存策略失败: ' + (e?.response?.data?.detail || e?.message))
+  }
+  excludeSaving.value = false
 }
 
 async function triggerCleanup() {

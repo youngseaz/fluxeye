@@ -24,13 +24,13 @@ def create_storage() -> StorageBackend:
     if backend == "influxdb":
         from app.storage.influxdb_store import InfluxDBStore
 
-        logger.warning("存储后端: InfluxDB (尚未完整实现)")
+        logger.info("存储后端: InfluxDB (url=%s)", settings.storage.influxdb.url)
         return InfluxDBStore(settings.storage.influxdb)
 
     if backend == "clickhouse":
         from app.storage.clickhouse_store import ClickHouseStore
 
-        logger.warning("存储后端: ClickHouse (尚未完整实现)")
+        logger.info("存储后端: ClickHouse (host=%s)", settings.storage.clickhouse.host)
         return ClickHouseStore(settings.storage.clickhouse)
 
     logger.error("不支持的存储后端: %s", backend)

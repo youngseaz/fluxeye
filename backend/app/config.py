@@ -46,6 +46,18 @@ class PcapOutputConfig(BaseSettings):
     max_file_size_mb: int = 100
     max_file_count: int = 10
     storage_threshold_percent: int = 90  # 磁盘使用率超过此值自动清理旧 pcap
+    # ── 大流量传输不保存 pcap（节省磁盘）──────────────────
+    # 按 nDPI 分类排除（video/streaming/download/media/music/filesharing）
+    exclude_categories: list[str] = Field(
+        default_factory=lambda: ["video", "streaming", "download", "media", "music", "filesharing"]
+    )
+    # 按协议名排除（如 P2P 下载、QUIC、FTP 数据等大流量协议）
+    exclude_protocols: list[str] = Field(
+        default_factory=lambda: [
+            "bittorrent", "quic", "http3", "ftp_data", "nfs",
+            "smbv1", "smbv23", "rtmp", "mpegts", "mpegdash",
+        ]
+    )
 
 
 class TLSKeyLogConfig(BaseSettings):

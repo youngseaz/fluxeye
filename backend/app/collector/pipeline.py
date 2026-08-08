@@ -48,6 +48,9 @@ class CapturePipeline:
         pcap_output_dir: str = "./data/captures",
         pcap_max_file_size_mb: int = 100,
         pcap_max_file_count: int = 10,
+        # 大流量传输（视频流/下载等）不保存 pcap：按分类/协议名排除
+        pcap_exclude_categories: tuple[str, ...] = (),
+        pcap_exclude_protocols: tuple[str, ...] = (),
         tls_keylog_file: str = "",
         tls_keylog_reload_interval: float = 5.0,
         geo_resolver: Optional[GeoIPResolver] = None,
@@ -64,6 +67,11 @@ class CapturePipeline:
         self.stats_interval = stats_interval
         self.pcap_output_enabled = pcap_output_enabled
         self.tls_keylog_reload_interval = tls_keylog_reload_interval
+        # 大流量传输排除配置（小写归一化）
+        self._pcap_exclude_categories = {c.lower() for c in (pcap_exclude_categories or [])}
+        self._pcap_exclude_protocols = {p.lower() for p in (pcap_exclude_protocols or [])}
+        # 已判定跳过缓存的大流量流（flow_key → 整条流不再写 pcap）
+        self._pcap_excluded_keys: set[str] = set()
 
         self.dpi: Optional[DPIEngine] = None
         self.geo_resolver = geo_resolver
@@ -86,10 +94,15 @@ class CapturePipeline:
 
         # pcap 输出配置（数据缓存：自动写入缓存目录）
         if pcap_output_enabled:
+            from app.config import settings as _settings
+            # 与流保留期对齐：pcap 缓存按时间保留（默认同 retention_days），
+            # 避免流记录还在但对应报文已被轮转清理，导致无法查看原始报文
+            retention_days = getattr(_settings.storage, "retention_days", 7)
             self.cache_writer = PcapWriter(
                 output_dir=pcap_output_dir,
                 max_file_size=pcap_max_file_size_mb * 1024 * 1024,
                 max_file_count=pcap_max_file_count,
+                max_file_age_seconds=retention_days * 86400,
             )
 
         # TLS Key Log
@@ -329,6 +342,25 @@ class CapturePipeline:
 
     # ── 处理单包 ────────────────────────────────────────
 
+    def _should_cache_pcap(self, flow_key: str, l7_proto: str, l7_category: str) -> bool:
+        """判断该包的 pcap 是否应写入缓存。
+
+        大流量传输（视频流/下载等）不保存 pcap 以节省磁盘：
+          - 协议名或分类命中排除配置 → 整条流后续包都不写（记住 flow_key）
+          - 未命中 → 正常缓存
+        """
+        if not flow_key:
+            return True
+        if flow_key in self._pcap_excluded_keys:
+            return False
+        if l7_proto.lower() in self._pcap_exclude_protocols:
+            self._pcap_excluded_keys.add(flow_key)
+            return False
+        if l7_category.lower() in self._pcap_exclude_categories:
+            self._pcap_excluded_keys.add(flow_key)
+            return False
+        return True
+
     async def _process_packet(self, pkt: ParsedPacket) -> None:
         """处理一个数据包：DPI → 流管理 → 存储 → pcap 输出。"""
         if pkt is None:
@@ -501,8 +533,8 @@ class CapturePipeline:
             if (self.recording_writer or self.cache_writer) else "",
         )
 
-        # pcap 数据缓存输出（自动，无过滤）
-        if self.cache_writer:
+        # pcap 数据缓存输出（自动）：大流量传输（视频流/下载等）不保存，节省磁盘
+        if self.cache_writer and self._should_cache_pcap(flow_key, l7_proto, l7_category):
             self.cache_writer.write(pkt)
         # pcap 手动录制输出（支持 BPF 过滤）
         if self.recording_writer:
@@ -665,9 +697,10 @@ class CapturePipeline:
             count = await self.storage.write_flows_batch(expired)
             if count > 0:
                 logger.debug("刷出 %d 条流到存储", count)
-                # 清理已刷出的流元数据缓存
+                # 清理已刷出的流元数据缓存与大流量 pcap 排除标记
                 for k in keys:
                     self._flow_meta.pop(k, None)
+                    self._pcap_excluded_keys.discard(k)
         except Exception as e:
             logger.error("写入流失败: %s", e)
         return keys
@@ -760,6 +793,10 @@ class CapturePipeline:
                 )
                 if deleted > 0:
                     logger.info("数据保留: 已清理 %d 条过期流记录", deleted)
+                # 同步清理过期 pcap 缓存（与流保留期一致），
+                # 保证保留期内的流始终能查看原始报文
+                if self.cache_writer:
+                    self.cache_writer.cleanup_expired(retention_days * 86400)
             except Exception as e:
                 logger.warning("数据保留清理异常: %s", e)
 

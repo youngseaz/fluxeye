@@ -47,11 +47,14 @@ class PcapWriter:
         filename_prefix: str = "fluxeye",
         max_file_size: int = 100 * 1024 * 1024,  # 100MB 轮转
         max_file_count: int = 10,  # 最多保留 10 个文件
+        max_file_age_seconds: Optional[int] = None,  # 按时间保留（与流保留期对齐）
     ):
         self.output_dir = Path(output_dir)
         self.filename_prefix = filename_prefix
         self.max_file_size = max_file_size
         self.max_file_count = max_file_count
+        # 设置后按时间保留：删除超过该时长的 pcap 文件；None 则退回按数量保留
+        self.max_file_age_seconds = max_file_age_seconds
         self._file: Optional[BinaryIO] = None
         self._current_path: Optional[Path] = None
         self._current_size = 0
@@ -91,15 +94,52 @@ class PcapWriter:
             self._current_size = 0
 
     def _cleanup_old(self) -> None:
-        """删除超出 max_file_count 的旧文件。"""
+        """按保留策略删除旧 pcap 文件。
+
+        - 配置 max_file_age_seconds 时：按时间保留（与流保留期对齐），删除超龄
+          文件；数量不设上限，由 retention 循环 / 磁盘阈值兜底。
+        - 未配置时：保留旧行为，按 max_file_count 清理最旧文件。
+        """
         try:
             files = sorted(self.output_dir.glob(f"{self.filename_prefix}_*.pcap"))
+            if self.max_file_age_seconds is not None:
+                now = time.time()
+                for f in list(files):
+                    try:
+                        age = now - f.stat().st_mtime
+                    except OSError:
+                        continue
+                    if age > self.max_file_age_seconds:
+                        f.unlink(missing_ok=True)
+                        logger.info("删除超龄 pcap: %s (%.1f 天)", f.name, age / 86400)
+                return
             while len(files) >= self.max_file_count:
                 oldest = files.pop(0)
                 oldest.unlink(missing_ok=True)
                 logger.info("删除旧 pcap: %s", oldest.name)
         except OSError:
             pass
+
+    def cleanup_expired(self, max_age_seconds: float) -> int:
+        """删除超过指定时长的 pcap 文件，返回删除数量。
+
+        供定时保留任务调用，与流记录保留期保持同步。
+        """
+        deleted = 0
+        try:
+            now = time.time()
+            for f in self.output_dir.glob(f"{self.filename_prefix}_*.pcap"):
+                try:
+                    if now - f.stat().st_mtime > max_age_seconds:
+                        f.unlink(missing_ok=True)
+                        deleted += 1
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        if deleted > 0:
+            logger.info("pcap 保留清理: 删除 %d 个超期文件", deleted)
+        return deleted
 
     def write(self, pkt: ParsedPacket) -> None:
         """写入一个数据包到 pcap 文件。"""
